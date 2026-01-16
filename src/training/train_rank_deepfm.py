@@ -20,7 +20,7 @@ os.chdir(get_root_dir())
 DATA_DIR = 'data/processed'
 MODEL_DIR = 'src/models/saved'
 BATCH_SIZE = 512
-EPOCHS = 5
+EPOCHS = 15
 LR = 0.001
 
 if not os.path.exists(MODEL_DIR):
@@ -73,12 +73,16 @@ def train(train_loader, test_loader, total_vocab_size, num_sparse_features):
         num_dense_features=1, # global_score
         embedding_dim=16,
         hidden_dims=[64, 32],
-        dropout=0.3
+        dropout=0.5
     )
     
-    optimizer = optim.Adam(model.parameters(), lr=LR)
+    optimizer = optim.Adam(model.parameters(), lr=LR, weight_decay=1e-5)
     criterion = torch.nn.BCELoss()
     
+    best_auc = 0.0
+    best_epoch = 0
+    save_path = os.path.join(MODEL_DIR, 'deepfm.pth')
+
     for epoch in range(EPOCHS):
         model.train()
         total_loss = 0
@@ -101,8 +105,16 @@ def train(train_loader, test_loader, total_vocab_size, num_sparse_features):
         print(f"Epoch {epoch+1}/{EPOCHS} | Loss: {total_loss/len(train_loader):.4f} | Train AUC: {train_auc:.4f}")
         
         # Evaluation
-        evaluate(model, test_loader)
+        test_auc = evaluate(model, test_loader)
         
+        # Save Best Model
+        if test_auc > best_auc:
+            best_auc = test_auc
+            best_epoch = epoch + 1
+            torch.save(model.state_dict(), save_path)
+            print(f"   >>> New Best Model Saved (AUC: {best_auc:.4f})")
+            
+    print(f"\nTraining Finished. Best Test AUC: {best_auc:.4f} at Epoch {best_epoch}")
     return model
 
 def evaluate(model, test_loader):
@@ -122,6 +134,7 @@ def evaluate(model, test_loader):
             
     auc = roc_auc_score(all_labels, all_preds)
     print(f"   >>> Test Loss: {total_loss/len(test_loader):.4f} | Test AUC: {auc:.4f}")
+    return auc
 
 def main():
     # 1. Load Metadata
@@ -151,10 +164,10 @@ def main():
     # 3. Train
     model = train(train_loader, test_loader, total_vocab_size, len(user_cols) + len(item_cols))
     
-    # 4. Save
-    save_path = os.path.join(MODEL_DIR, 'deepfm.pth')
-    torch.save(model.state_dict(), save_path)
-    print(f"DeepFM Model saved to {save_path}")
+    # 4. Save (Already handled in train loop for best model)
+    # save_path = os.path.join(MODEL_DIR, 'deepfm.pth')
+    # torch.save(model.state_dict(), save_path)
+    # print(f"DeepFM Model saved to {save_path}")
 
 if __name__ == "__main__":
     main()
