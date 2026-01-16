@@ -3,8 +3,8 @@ import numpy as np
 import os
 import pickle
 from tqdm import tqdm
-# from root import get_root_dir
-# os.chdir(get_root_dir())
+from root import get_root_dir
+os.chdir(get_root_dir())
 
 class RecSysPreprocessor:
     def __init__(self, data_dir='data/raw_data', processed_dir='data/processed'):
@@ -37,10 +37,6 @@ class RecSysPreprocessor:
         train_df, test_df = self.split_and_save(df_transformed)
         
         # 5. Compute Global Score (using ONLY Train data to avoid leakage)
-        # We need original IIDs, so we recover them or pass original df subset
-        # To be safe, let's use the split mask on the original dataframe (before ID transformation)
-        # But wait, df_transformed has mapped IDs. 
-        # Strategy: Use df_transformed for split logic, get indices, apply to original df for stats
         
         self.compute_global_score(df, train_df.index)
         
@@ -148,13 +144,6 @@ class RecSysPreprocessor:
     def compute_global_score(self, original_df, train_indices, alpha=0.5):
         print("[5] Computing Global Item Scores (Hotness)...")
         
-        # Filter original dataframe to get training data only
-        # Note: original_df has not been sorted in this method, but indices should align 
-        # IF we didn't reset index or drop rows.
-        # Wait, in split_and_save we did `df = df.sort_values`. 
-        # This changes the order, so simple index slicing won't work if indices were reset.
-        # But we returned `train_df` which has the index from the sorted df.
-        
         # Let's be safer: Recalculate the split on original_df using the same logic
         # OR better: The `original_df` passed to this method is the one BEFORE transformation
         # We should apply the same sorting and splitting logic.
@@ -171,20 +160,32 @@ class RecSysPreprocessor:
         train_df['time_weight'] = np.exp(-decay_factor * train_df['age'])
         train_df['label_weighted'] = train_df['label'] * train_df['time_weight']
         item_stats = train_df.groupby('iid').agg(
-            purchase_count=('time_weight', 'sum'),
+            impression_count=('time_weight', 'sum'),
             label_weighted_sum=('label_weighted', 'sum')
         ).reset_index()
+        
+        # Bayesian Smoothing for CTR
+        # Global CTR = Total Weighted Labels / Total Weighted Impressions
         global_ctr = train_df['label_weighted'].sum() / (train_df['time_weight'].sum() + 1e-8)
+        
+        # Smoothing factor
         m = 20.0
-        item_stats['smoothed_ctr'] = (item_stats['label_weighted_sum'] + m * global_ctr) / (item_stats['purchase_count'] + m)
+        item_stats['smoothed_ctr'] = (item_stats['label_weighted_sum'] + m * global_ctr) / (item_stats['impression_count'] + m)
+        
+        # Normalize to [0, 1] for fusion
         def normalize(series):
             return (series - series.min()) / (series.max() - series.min() + 1e-8)
-        item_stats['norm_count'] = normalize(item_stats['purchase_count'])
+            
+        item_stats['norm_count'] = normalize(item_stats['impression_count'])
         item_stats['norm_ctr'] = normalize(item_stats['smoothed_ctr'])
+        
+        # Global Score = alpha * Popularity + (1-alpha) * CTR
         item_stats['global_score'] = (
             alpha * item_stats['norm_count'] + 
             (1 - alpha) * item_stats['norm_ctr']
         )
+        
+        # Keep raw stats for debugging
         item_stats['ctr_mean'] = item_stats['smoothed_ctr']
         
         # Map original IID to Slot ID
@@ -197,7 +198,9 @@ class RecSysPreprocessor:
         
         # Save
         output_path = os.path.join(self.processed_dir, 'item_global_score.csv')
-        item_stats[['iid', 'slot_id', 'global_score', 'purchase_count', 'ctr_mean']].to_csv(output_path, index=False)
+        # Rename impression_count back to something standard or keep it?
+        # Let's keep impression_count in the CSV for clarity.
+        item_stats[['iid', 'slot_id', 'global_score', 'impression_count', 'ctr_mean']].to_csv(output_path, index=False)
         print(f"Global scores saved to {output_path}")
         print(item_stats[['iid', 'slot_id', 'global_score']].head())
 

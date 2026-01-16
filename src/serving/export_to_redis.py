@@ -14,6 +14,9 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(
 from src.models.recall.dssm import DSSM
 from src.serving.redis_storage import RedisStorage
 
+# from root import get_root_dir
+# os.chdir(get_root_dir())
+
 DATA_DIR = 'data/processed'
 MODEL_DIR = 'src/models/saved'
 BATCH_SIZE = 1024
@@ -136,12 +139,15 @@ def export_recall_results(redis_client, model, meta, train_df, test_df, top_k=50
                     prefix='dssm:recall:'
                 )
 
-def export_merged_recall(redis_client, model, meta, train_df, test_df, top_k_dssm=250, hot_top_n=100):
+def export_merged_recall(redis_client, model, meta, train_df, test_df, slot_to_raw_item, top_k_dssm=250, hot_top_n=100):
     """
     Export merged recall list for each user:
     1) DSSM Top-K candidates per user
     2) Merged with Global Hot Top-N (deduplicated)
     Results are stored in Redis under key: recall:{uid}
+    
+    Args:
+        slot_to_raw_item (dict): Mapping from Item Slot ID (int) to Raw Item ID (str)
     """
     user_cols = meta['user_feature_cols']
     item_cols = meta['item_feature_cols']
@@ -158,8 +164,13 @@ def export_merged_recall(redis_client, model, meta, train_df, test_df, top_k_dss
         hot_df = pd.read_csv(hot_csv_path)
         if 'slot_id' in hot_df.columns and 'global_score' in hot_df.columns:
             hot_df = hot_df.sort_values('global_score', ascending=False).head(hot_top_n)
-            hot_item_ids = hot_df['slot_id'].astype(int).tolist()
-            print(f"Loaded {len(hot_item_ids)} global hot items from {hot_csv_path}")
+            # Store as Raw IDs directly
+            # hot_item_ids = hot_df['slot_id'].astype(int).tolist()
+            # Map to Raw
+            hot_slot_ids = hot_df['slot_id'].astype(int).tolist()
+            hot_item_ids = [slot_to_raw_item.get(sid, str(sid)) for sid in hot_slot_ids]
+            
+            print(f"Loaded {len(hot_item_ids)} global hot items (Raw IDs) from {hot_csv_path}")
         else:
             print("Warning: item_global_score.csv missing 'slot_id' or 'global_score' columns. Hot items disabled.")
     else:
@@ -184,25 +195,53 @@ def export_merged_recall(redis_client, model, meta, train_df, test_df, top_k_dss
             
             for j in range(len(user_batch)):
                 u_row = user_batch[j].cpu().numpy()
-                uid = str(u_row[0])
+                uid_slot = int(u_row[0])
+                # TODO: If we had User Raw Map, we would convert here.
+                # For now, we use Slot ID as User Key.
+                # If we want to simulate Raw ID, we can prefix it or just keep it.
+                # Given user request "Store using Raw UID", we strictly need the map.
+                # Since we lack the map, I will use "u{slot}" as a placeholder for Raw ID 
+                # OR keep it as is if that's what we have.
+                # Let's keep it as is (Slot ID) for User Key because we can't invent Raw IDs.
+                # But for Item IDs, we MUST convert.
+                
+                uid = str(uid_slot)
                 
                 rec_indices = top_indices[j]
-                seen = set()
+                
+                # Interleave Strategy: 4 DSSM + 1 Hot
+                # DSSM: rec_indices -> Slot IDs -> Raw IDs
+                
+                dssm_slot_ids = [candidate_ids[int(idx)] for idx in rec_indices]
+                dssm_items = [slot_to_raw_item.get(sid, str(sid)) for sid in dssm_slot_ids]
+                
+                # Hot items are already Raw IDs
+                hot_items = hot_item_ids 
+                
                 merged_items = []
+                seen = set()
                 
-                # Add DSSM Top-K first
-                for idx in rec_indices:
-                    iid = str(candidate_ids[int(idx)])
-                    if iid not in seen:
-                        seen.add(iid)
-                        merged_items.append(iid)
+                # Pointers
+                p_dssm = 0
+                p_hot = 0
                 
-                # Then merge Global Hot
-                for hot_iid in hot_item_ids:
-                    iid = str(hot_iid)
-                    if iid not in seen:
-                        seen.add(iid)
-                        merged_items.append(iid)
+                while len(merged_items) < (top_k_dssm + hot_top_n) and (p_dssm < len(dssm_items) or p_hot < len(hot_items)):
+                    # Add 4 DSSM items
+                    for _ in range(4):
+                        if p_dssm < len(dssm_items):
+                            item = dssm_items[p_dssm]
+                            if item not in seen:
+                                seen.add(item)
+                                merged_items.append(item)
+                            p_dssm += 1
+                    
+                    # Add 1 Hot item
+                    if p_hot < len(hot_items):
+                        item = hot_items[p_hot]
+                        if item not in seen:
+                            seen.add(item)
+                            merged_items.append(item)
+                        p_hot += 1
                 
                 # Assign descending scores to preserve order in Redis ZSET
                 n = len(merged_items)
@@ -215,20 +254,13 @@ def export_merged_recall(redis_client, model, meta, train_df, test_df, top_k_dss
                     prefix='recall:'
                 )
 
-def export_global_hot(redis_client, hot_csv_path, top_n=100):
+def export_global_hot(redis_client, hot_csv_path, slot_to_raw_item, top_n=100):
     print("Exporting Global Hot Items...")
     if not os.path.exists(hot_csv_path):
         print(f"Warning: {hot_csv_path} not found. Skipping.")
         return
         
     df = pd.read_csv(hot_csv_path)
-    # df has columns: iid, slot_id, global_score, ...
-    # We want to store 'slot_id' (which is used in model) or raw 'iid'?
-    # Consistent with DSSM recall, we should use 'slot_id' if that's what we recommend.
-    # However, usually we return Real Item IDs to frontend.
-    # BUT, our DSSM returns Slot IDs (from candidate_ids above).
-    # So we should stick to Slot IDs for consistency, and have a final mapping layer if needed.
-    # Let's use 'slot_id' here.
     
     if 'slot_id' not in df.columns or 'global_score' not in df.columns:
         print("Error: item_global_score.csv missing required columns.")
@@ -237,7 +269,10 @@ def export_global_hot(redis_client, hot_csv_path, top_n=100):
     # Sort by global_score desc
     df = df.sort_values('global_score', ascending=False).head(top_n)
     
-    items = df['slot_id'].astype(str).tolist()
+    # Map Slot ID -> Raw ID
+    slot_ids = df['slot_id'].astype(int).tolist()
+    items = [slot_to_raw_item.get(sid, str(sid)) for sid in slot_ids]
+    
     scores = df['global_score'].tolist()
     
     redis_client.save_recall_results(
@@ -246,7 +281,7 @@ def export_global_hot(redis_client, hot_csv_path, top_n=100):
         scores=scores, 
         prefix=''
     )
-    print(f"Saved {len(items)} hot items to Redis key 'global_hot'")
+    print(f"Saved {len(items)} hot items (Raw IDs) to Redis key 'global_hot'")
 
 def main():
     parser = argparse.ArgumentParser()
@@ -275,12 +310,16 @@ def main():
     train_df = pd.read_csv(train_csv)
     test_df = pd.read_csv(test_csv)
     
+    # Load Raw -> Slot Mapping for Items
+    item_map_df = pd.read_csv(os.path.join(DATA_DIR, 'item_global_score.csv'))
+    slot_to_raw_item = dict(zip(item_map_df['slot_id'].astype(int), item_map_df['iid'].astype(str)))
+
     # 2. Export merged Recall (DSSM + Global Hot)
-    export_merged_recall(r, model, meta, train_df, test_df, top_k_dssm=250, hot_top_n=100)
+    export_merged_recall(r, model, meta, train_df, test_df, slot_to_raw_item, top_k_dssm=250, hot_top_n=100)
     
     # 3. Export Global Hot for cold-start fallback
     hot_csv = os.path.join(DATA_DIR, 'item_global_score.csv')
-    export_global_hot(r, hot_csv)
+    export_global_hot(r, hot_csv, slot_to_raw_item)
     
     print("\n=== Export Completed ===")
 
