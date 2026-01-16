@@ -1,75 +1,322 @@
 # Zero-query Homepage Recommendation
 
-## 项目简介
-本项目构建了一个无搜索意图的首页推荐系统，旨在提升点击率 (CTR) 和转化率 (CVR)。
+End-to-end zero-query homepage recommendation system for e-commerce, targeting CTR and CVR uplift on the home feed when users arrive **without an explicit search query**.
 
-### 核心模块
-1.  **ETL / Data Pipeline**: 处理 shop.dat, item_feature, user_feature，生成训练数据和全局特征映射 (Slot Indexing)。
-2.  **Recall Layer**: 双塔模型 (DSSM) + 热门召回 (Hot Item Recall)。
-3.  **Ranking Layer**: DeepFM 多任务排序模型 (CTR/CVR)，引入 Global Score (热门度) 作为 Dense Feature。
-4.  **Serving**: Redis 存储离线计算的 Recall 结果；DeepFM 用于精排。
+The system implements a full offline–online pipeline:
 
-## 环境依赖
-*   Python 3.8+
-*   PyTorch >= 2.0.0
-*   Pandas, NumPy
-*   Redis >= 4.5.0
-*   Scikit-learn
+- ETL & feature engineering
+- Recall (DSSM) + hot item recall
+- Ranking (DeepFM with global hotness as dense feature)
+- Online serving via Redis + Flask API
 
-安装依赖：
+---
+
+## 1. Project Overview
+
+### Core Modules
+
+1. **ETL / Data Pipeline**
+   - Reads raw logs and features (`shop.dat`, `user_feature.dat`, `item_feature.dat`) from `data/raw_data/`
+   - Builds a **global slot-based feature map** (string key `col=value` → integer ID)
+   - Generates train/test CSVs for both recall and ranking
+   - Computes **global item hotness score** with time decay + Bayesian-smoothed CTR
+
+2. **Recall Layer (DSSM)**
+   - Dual-tower semantic model (user tower + item tower)
+   - Supports **pointwise** training with negative sampling and **in-batch** negative training
+   - Offline batch scoring to generate Top-K candidates per user
+
+3. **Ranking Layer (DeepFM)**
+   - DeepFM CTR model for fine-grained ranking of recall candidates
+   - Sparse features: user & item IDs and categorical tags
+   - Dense feature: global item hotness score from ETL
+
+4. **Serving Layer**
+   - Redis stores merged recall lists and global hot items
+   - Flask app exposes HTTP APIs for:
+     - Pure recall candidates
+     - Full recommendation pipeline: Recall → Rank
+
+---
+
+## 2. Environment & Dependencies
+
+### Requirements
+
+- Python 3.8+
+- PyTorch >= 2.0.0
+- Pandas, NumPy
+- Scikit-learn
+- Redis >= 4.5.0 (running locally or remotely)
+
+Install dependencies:
+
 ```bash
 pip install -r requirements.txt
 ```
 
-## 数据准备
-请确保以下原始数据文件位于 `data/raw/` 目录：
-*   `shop.dat`: 行为日志 (ts | uid | iid | label)
-*   `item_feature.dat`: 商品特征 (iid | tag1 | tag2 | tag3)
-*   `user_feature.dat`: 用户特征 (uid | tag1 | tag2)
+---
 
-## 运行步骤 (Manual Execution)
+## 3. Data Preparation
 
-### 1. ETL 数据预处理
-执行预处理脚本，生成训练集、测试集、Meta Data 和 Global Scores。
+Place the following raw data files under `data/raw_data/`:
+
+- `shop.dat`  
+  Interaction log:  
+  `ts | uid | iid | label`
+- `user_feature.dat`  
+  User features:  
+  `uid | utag1 | utag2`
+- `item_feature.dat`  
+  Item features:  
+  `iid | itag1 | itag2 | itag3`
+
+> `uid` / `iid` here are **raw IDs** from the data provider. They will be mapped into global slot IDs during ETL.
+
+---
+
+## 4. Offline Pipeline: Step-by-step
+
+All commands assume you are in the project root:
+
+```bash
+cd /path/to/ec_homepage_recsys
+```
+
+### 4.1 ETL & Feature Engineering
+
+Run the ETL preprocessor to:
+
+- Merge logs and features
+- Build global feature map (slot indexing)
+- Generate `train.csv`, `test.csv`
+- Compute global item hotness scores
+
 ```bash
 python src/etl/preprocessor.py
 ```
-*   输出目录: `data/processed/`
-*   关键产出: `train.csv`, `test.csv`, `meta_data.pkl`, `item_global_score.csv`
 
-### 2. 训练 Recall 模型 (DSSM)
-训练双塔召回模型，并评估 Recall@K 指标。
-```bash
-python src/training/train_recall_dssm.py
-```
-*   模型保存: `src/models/saved/dssm_inbatch.pth`
+Outputs (under `data/processed/`):
 
-### 3. 导出 Recall 结果到 Redis
-将计算好的 User Recall 结果 (Top-K Items) 写入 Redis。
-(请确保本地 Redis 服务已启动: `redis-server`)
-```bash
-python src/serving/export_to_redis.py --host localhost --port 6379
-```
-*   Redis Key: `dssm:recall:{user_slot_id}`
+- `train.csv`
+- `test.csv`
+- `meta_data.pkl` (feature dimensions and column config)
+- `feature_map.pkl` (global slot mapping: `"col=value" → int`)
+- `item_global_score.csv` (includes `iid`, `slot_id`, `global_score`, `impression_count`, `ctr_mean`)
 
-### 4. 训练 Ranking 模型 (DeepFM)
-训练 DeepFM 排序模型，并评估 AUC 指标。
+### 4.2 Train Recall Model (DSSM)
+
+The project provides two training modes for DSSM:
+
+1. **Pointwise training with negative sampling**  
+   Uses BCE loss with explicit positive/negative samples.
+
+   ```bash
+   python src/training/train_recall_dssm_pointwise.py
+   ```
+
+   Model is saved as:
+
+   - `src/models/saved/dssm_pointwise.pth`
+
+2. **In-batch negative training** (optional / experimental)
+
+   ```bash
+   python src/training/train_recall_dssm_inbatch.py
+   ```
+
+   Model is saved as:
+
+   - `src/models/saved/dssm_inbatch.pth`
+
+The default downstream export script uses the **pointwise** model (`dssm_pointwise.pth`).
+
+### 4.3 Train Ranking Model (DeepFM)
+
+Train the DeepFM CTR ranking model using the processed data and global hotness score:
+
 ```bash
 python src/training/train_rank_deepfm.py
 ```
-*   模型保存: `src/models/saved/deepfm.pth`
 
-### 5. (Optional) 验证 Recall 服务接口
-测试 Redis 读取接口。
+This script:
+
+- Loads `train.csv` / `test.csv` and `meta_data.pkl`
+- Builds sparse inputs from user/item slot IDs
+- Builds a dense feature from `item_global_score.csv` (per-item global_score)
+- Trains DeepFM and reports AUC
+
+Model is saved as:
+
+- `src/models/saved/deepfm.pth`
+
+### 4.4 Export Recall Results & Global Hot to Redis
+
+Before running export, make sure a Redis instance is available, for example:
+
 ```bash
-python src/serving/recall_service.py
+redis-server
 ```
 
-## 架构说明
-*   **Feature Engineering**: 使用 Slot-based 全局特征编码。
-*   **Recall**: 
-    *   Offline Batch Prediction: `export_to_redis.py` 计算 User Embedding 与 All Item Embeddings 的相似度，存入 Redis。
-    *   Online Serving: 直接读取 Redis 中的 Item List。
-*   **Ranking**:
-    *   DeepFM 接收 Recall 的候选集。
-    *   特征: User/Item ID (Sparse/Shared Embedding) + Global Score (Dense)。
+Then run:
+
+```bash
+python src/serving/export_to_redis.py --host localhost --port 6379
+```
+
+This script will:
+
+1. Load:
+   - `meta_data.pkl`
+   - `train.csv`, `test.csv`
+   - `dssm_pointwise.pth`
+   - `item_global_score.csv`
+2. Compute user–item similarity scores using the DSSM model
+3. Merge DSSM Top-K candidates per user with global hot items using an interleaving strategy
+4. Write the following keys to Redis (DB = 1 by default):
+
+- Per-user merged recall list:
+  - Key pattern: `recall:{user_slot_id}`
+  - Value: ZSET of **raw item IDs** with descending scores encoding order
+- Global hot items:
+  - Key: `global_hot`
+  - Value: ZSET of **raw item IDs** with their `global_score`
+
+These keys will be consumed by the online serving layer.
+
+---
+
+## 5. Online Serving
+
+### 5.1 Components
+
+- **Redis**: stores merged recall lists and global hot items (as above)
+- **RankService**: wraps DeepFM model and feature lookup for inference  
+  Location: `src/serving/rank_service.py`
+- **Flask API**: main HTTP entrypoint  
+  Location: `src/serving/recall_api.py`
+
+### 5.2 Environment Variables
+
+The serving app reads the following environment variables (with defaults):
+
+- `RECSYS_REDIS_HOST` (default: `localhost`)
+- `RECSYS_REDIS_PORT` (default: `6379`)
+- `RECSYS_REDIS_DB` (default: `1`)
+- `RECSYS_API_HOST` (default: `0.0.0.0`)
+- `RECSYS_API_PORT` (default: `8000`)
+
+### 5.3 Start the API Server
+
+From the project root:
+
+```bash
+python src/serving/recall_api.py
+```
+
+You should see logs similar to:
+
+- DeepFM model loaded
+- RankService initialized
+- Flask app listening on `http://0.0.0.0:8000`
+
+### 5.4 API Endpoints
+
+#### 5.4.1 Health Check
+
+```bash
+GET /health
+```
+
+Response example:
+
+```json
+{
+  "redis": "ok",
+  "rank_service": "ok"
+}
+```
+
+#### 5.4.2 Pure Recall (Candidates Only)
+
+```bash
+GET /recall/<uid>?top_k=50
+```
+
+- `uid`: **raw user ID** from the original data
+- Internally:
+  - The service converts raw `uid` → slot ID using the feature map loaded in `RankService`
+  - Uses the slot ID to look up `recall:{user_slot_id}` in Redis
+  - If no record exists, falls back to `global_hot`
+
+Response example:
+
+```json
+{
+  "uid": "5905843863414246198",
+  "stage": "recall",
+  "count": 50,
+  "is_cold_start": false,
+  "items": [
+    "2913544956788485329",
+    "18292817638588633000",
+    "... more item ids ..."
+  ]
+}
+```
+
+#### 5.4.3 Full Recommendation: Recall → Rank
+
+```bash
+GET /recommend/<uid>?top_k=10
+```
+
+- `uid`: raw user ID
+- `top_k`: number of ranked items to return (default 10)
+
+Pipeline inside the endpoint:
+
+1. Convert raw `uid` → slot ID
+2. Fetch up to 100 candidates from `recall:{user_slot_id}` (or `global_hot` for cold-start)
+3. Use `RankService` (DeepFM) to compute CTR scores for each candidate
+4. Sort by score and return the top `top_k`
+
+Response example:
+
+```json
+{
+  "uid": "5905843863414246198",
+  "stage": "rank",
+  "is_cold_start": false,
+  "items": [
+    { "id": "2913544956788485329", "score": 0.99 },
+    { "id": "18292817638588633000", "score": 0.99 },
+    { "id": "16199685692793916813", "score": 0.98 }
+  ]
+}
+```
+
+---
+
+## 6. High-level Architecture Summary
+
+- **Feature Engineering**
+  - Global slot-based encoding ensures consistent IDs across recall and ranking
+  - Global hotness score combines **popularity (impressions)** and **CTR** with time decay and Bayesian smoothing
+
+- **Recall**
+  - DSSM computes dense embeddings for users and items
+  - Offline batch scoring writes Top-K raw item IDs per user into Redis (`recall:{uid_slot}`)
+  - Global hot items are exported separately for cold-start users (`global_hot`)
+
+- **Ranking**
+  - DeepFM takes:
+    - Sparse features: slot IDs for user and item
+    - Dense feature: `global_score` from ETL
+  - Outputs CTR probability used for sorting
+
+- **Serving**
+  - `/recall/<uid>`: view recall results only (debugging / analysis)
+  - `/recommend/<uid>`: full pipeline (Recall → Rank) used by the homepage feed
+
+This README reflects the current end-to-end implementation of the **zero-query homepage recommendation** system, including ETL, recall (DSSM), ranking (DeepFM), Redis export, and online serving via Flask.
