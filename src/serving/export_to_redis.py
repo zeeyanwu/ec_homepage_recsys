@@ -291,7 +291,7 @@ def main():
     
     # 0. Init Redis
     try:
-        r = RedisStorage(host=args.host, port=args.port, db=1)
+        r = RedisStorage(host=args.host, port=args.port, db=3)
         r.client.ping()
         print("Connected to Redis.")
     except Exception as e:
