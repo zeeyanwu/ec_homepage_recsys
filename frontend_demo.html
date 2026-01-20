@@ -1,0 +1,334 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Homepage Recommendation Demo</title>
+  <style>
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      margin: 0;
+      padding: 0;
+      background: #f5f5f5;
+    }
+    header {
+      background: #1f2933;
+      color: #fff;
+      padding: 12px 24px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    header h1 {
+      margin: 0;
+      font-size: 18px;
+    }
+    header .user-info {
+      font-size: 13px;
+      opacity: 0.9;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    main {
+      padding: 16px 24px 32px;
+      max-width: 960px;
+      margin: 0 auto;
+    }
+    .controls {
+      margin-bottom: 16px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 14px;
+      flex-wrap: wrap;
+    }
+    .controls button {
+      padding: 6px 12px;
+      font-size: 13px;
+      border-radius: 4px;
+      border: 1px solid #cbd2d9;
+      background: #e4e7eb;
+      cursor: pointer;
+    }
+    .controls button:hover {
+      background: #d8dde4;
+    }
+    .controls input[type="text"] {
+      padding: 4px 8px;
+      font-size: 13px;
+      border-radius: 4px;
+      border: 1px solid #cbd2d9;
+      min-width: 220px;
+    }
+    .status {
+      margin-left: auto;
+      font-size: 13px;
+      color: #616e7c;
+    }
+    .items-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+      gap: 12px;
+    }
+    .item-card {
+      background: #fff;
+      border-radius: 6px;
+      border: 1px solid #d8dde4;
+      padding: 12px;
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+      min-height: 130px;
+    }
+    .item-id {
+      font-size: 13px;
+      color: #52606d;
+      word-break: break-all;
+      margin-bottom: 4px;
+    }
+    .item-score {
+      font-size: 12px;
+      color: #9fb3c8;
+      margin-bottom: 8px;
+    }
+    .item-actions {
+      margin-top: 8px;
+      display: flex;
+      gap: 8px;
+    }
+    .btn-buy,
+    .btn-not-interested {
+      flex: 1;
+      padding: 6px 8px;
+      font-size: 13px;
+      border-radius: 4px;
+      border: 1px solid transparent;
+      cursor: pointer;
+    }
+    .btn-buy {
+      background: #0b7285;
+      color: #fff;
+    }
+    .btn-buy:hover {
+      background: #0a6172;
+    }
+    .btn-not-interested {
+      background: #f0f4f8;
+      color: #52606d;
+      border-color: #d8dde4;
+    }
+    .btn-not-interested:hover {
+      background: #e1e7ef;
+    }
+    .footer-note {
+      margin-top: 20px;
+      font-size: 12px;
+      color: #9fb3c8;
+    }
+    .cold-start-badge {
+      display: inline-block;
+      margin-left: 6px;
+      padding: 2px 6px;
+      border-radius: 10px;
+      font-size: 11px;
+      background: #ffe8cc;
+      color: #d9480f;
+    }
+    .hot-badge {
+      display: inline-block;
+      margin-left: 6px;
+      padding: 2px 6px;
+      border-radius: 10px;
+      font-size: 11px;
+      background: #ffe3e3;
+      color: #c92a2a;
+    }
+    #meta-info {
+      font-size: 13px;
+      color: #616e7c;
+      margin-bottom: 8px;
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Homepage Recommendation Demo</h1>
+    <div class="user-info">
+      <span>Current User:</span>
+      <strong id="user-id"></strong>
+    </div>
+  </header>
+
+  <main>
+    <div class="controls">
+      <label for="uid-input">User ID:</label>
+      <input id="uid-input" type="text" placeholder="Enter a raw user ID" />
+      <button id="apply-uid-btn">Apply User</button>
+      <button id="refresh-btn">Refresh Recommendations</button>
+      <button id="new-user-btn">Generate Random Test User</button>
+      <div class="status" id="status-text">Idle</div>
+    </div>
+
+    <div id="meta-info"></div>
+
+    <div class="items-grid" id="items-container"></div>
+
+    <div class="footer-note">
+      Clicking "Buy" or "Not interested" only logs feedback in the browser console.
+      It is designed to be connected to a backend feedback API in the next step.
+    </div>
+  </main>
+
+  <script>
+    const origin = window.location.origin;
+    const API_BASE =
+      origin && origin.startsWith("http") ? origin : "http://127.0.0.1:8000";
+    const STORAGE_KEY = "recsys_test_user_id";
+    const STORAGE_SEQ_KEY = "recsys_test_user_seq";
+    const feedbackLog = [];
+
+    function getInitialUserId() {
+      return "5905843863414246198";
+    }
+
+    function setCurrentUserId(uid) {
+      localStorage.setItem(STORAGE_KEY, uid);
+      document.getElementById("user-id").textContent = uid;
+      document.getElementById("uid-input").value = uid;
+    }
+
+    function generateSequentialUserId() {
+      let seqRaw = localStorage.getItem(STORAGE_SEQ_KEY);
+      let seq = parseInt(seqRaw, 10);
+      if (Number.isNaN(seq)) {
+        seq = -1;
+      }
+      seq += 1;
+      if (seq > 999) {
+        seq = 0;
+      }
+      localStorage.setItem(STORAGE_SEQ_KEY, String(seq));
+      const suffix = seq.toString().padStart(3, "0");
+      return `999999${suffix}`;
+    }
+
+    async function fetchRecommendations(uid, topK = 30) {
+      const statusEl = document.getElementById("status-text");
+      statusEl.textContent = "Loading recommendations...";
+      try {
+        const resp = await fetch(`${API_BASE}/recommend/${encodeURIComponent(uid)}?top_k=${topK}`);
+        if (!resp.ok) {
+          throw new Error(`HTTP ${resp.status}`);
+        }
+        const data = await resp.json();
+        statusEl.textContent = "Loaded";
+        renderRecommendations(uid, data);
+      } catch (err) {
+        console.error("Failed to fetch recommendations:", err);
+        statusEl.textContent = "Error loading recommendations";
+      }
+    }
+
+    function renderRecommendations(uid, data) {
+      const container = document.getElementById("items-container");
+      const metaInfo = document.getElementById("meta-info");
+      container.innerHTML = "";
+
+      const isColdStart = data.is_cold_start === true;
+      const stage = data.stage || "rank";
+      const count = (data.items || []).length;
+
+      metaInfo.innerHTML =
+        `Stage: <strong>${stage}</strong>` +
+        (isColdStart ? '<span class="cold-start-badge">Cold-start user</span>' : "") +
+        ` | Items: <strong>${count}</strong>`;
+
+      (data.items || []).forEach(item => {
+        const card = document.createElement("div");
+        card.className = "item-card";
+
+        const idDiv = document.createElement("div");
+        idDiv.className = "item-id";
+        idDiv.textContent = `Item ID: ${item.id}`;
+        if (item.is_hot === true) {
+          const hotSpan = document.createElement("span");
+          hotSpan.className = "hot-badge";
+          hotSpan.textContent = "HOT";
+          idDiv.appendChild(hotSpan);
+        }
+
+        const scoreDiv = document.createElement("div");
+        scoreDiv.className = "item-score";
+        const scoreVal =
+          typeof item.score === "number" && Number.isFinite(item.score)
+            ? item.score.toFixed(4)
+            : String(item.score);
+        scoreDiv.textContent = `Score: ${scoreVal}`;
+
+        const actionsDiv = document.createElement("div");
+        actionsDiv.className = "item-actions";
+
+        const buyBtn = document.createElement("button");
+        buyBtn.className = "btn-buy";
+        buyBtn.textContent = "Buy";
+        buyBtn.onclick = () => handleFeedback(uid, item.id, "buy");
+
+        const skipBtn = document.createElement("button");
+        skipBtn.className = "btn-not-interested";
+        skipBtn.textContent = "Not interested";
+        skipBtn.onclick = () => handleFeedback(uid, item.id, "not_interested");
+
+        actionsDiv.appendChild(buyBtn);
+        actionsDiv.appendChild(skipBtn);
+
+        card.appendChild(idDiv);
+        card.appendChild(scoreDiv);
+        card.appendChild(actionsDiv);
+
+        container.appendChild(card);
+      });
+    }
+
+    function handleFeedback(uid, itemId, action) {
+      const ts = Date.now();
+      const record = { uid, itemId, action, ts };
+      feedbackLog.push(record);
+      console.log("Feedback", record);
+    }
+
+    window.addEventListener("DOMContentLoaded", () => {
+      let uid = getInitialUserId();
+      setCurrentUserId(uid);
+
+      document.getElementById("apply-uid-btn").addEventListener("click", () => {
+        const inputVal = document.getElementById("uid-input").value.trim();
+        if (inputVal.length === 0) {
+          return;
+        }
+        uid = inputVal;
+        setCurrentUserId(uid);
+        fetchRecommendations(uid);
+      });
+
+      document.getElementById("refresh-btn").addEventListener("click", () => {
+        const inputVal = document.getElementById("uid-input").value.trim();
+        if (inputVal.length > 0) {
+          uid = inputVal;
+          setCurrentUserId(uid);
+        } else {
+          uid = document.getElementById("user-id").textContent;
+        }
+        fetchRecommendations(uid);
+      });
+
+      document.getElementById("new-user-btn").addEventListener("click", () => {
+        uid = generateSequentialUserId();
+        setCurrentUserId(uid);
+        fetchRecommendations(uid);
+      });
+
+      fetchRecommendations(uid);
+    });
+  </script>
+</body>
+</html>

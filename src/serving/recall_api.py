@@ -1,7 +1,7 @@
 import os
 import sys
 import logging
-from flask import Flask, jsonify, request
+from flask import Flask, jsonify, request, send_from_directory
 
 # Add project root to sys.path
 sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
@@ -15,12 +15,18 @@ logger = logging.getLogger(__name__)
 
 REDIS_HOST = os.getenv("RECSYS_REDIS_HOST", "localhost")
 REDIS_PORT = int(os.getenv("RECSYS_REDIS_PORT", "6379"))
-REDIS_DB = int(os.getenv("RECSYS_REDIS_DB", "1"))
+REDIS_DB = int(os.getenv("RECSYS_REDIS_DB", "3"))
 
 API_HOST = os.getenv("RECSYS_API_HOST", "0.0.0.0")
 API_PORT = int(os.getenv("RECSYS_API_PORT", "8000"))
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 app = Flask(__name__)
+
+# Static frontend
+@app.route("/", methods=["GET"])
+def index():
+    return send_from_directory(PROJECT_ROOT, "frontend_demo.html")
 
 # Initialize Services
 redis_client = RedisStorage(host=REDIS_HOST, port=REDIS_PORT, db=REDIS_DB)
@@ -45,7 +51,9 @@ def health():
     else:
         status["rank_service"] = "error"
         
-    return jsonify(status), 200 if status["redis"] == "ok" else 500
+    resp = jsonify(status)
+    resp.headers["Access-Control-Allow-Origin"] = "*"
+    return resp, 200 if status["redis"] == "ok" else 500
 
 
 @app.route("/recall/<uid>", methods=["GET"])
@@ -77,13 +85,15 @@ def get_recall(uid):
         items = redis_client.get_recall_results(user_id="global_hot", prefix="", top_k=top_k)
         is_cold_start = True
         
-    return jsonify({
+    resp = jsonify({
         "uid": uid, 
         "stage": "recall",
         "count": len(items),
         "is_cold_start": is_cold_start,
         "items": items
     })
+    resp.headers["Access-Control-Allow-Origin"] = "*"
+    return resp
 
 
 @app.route("/recommend/<uid>", methods=["GET"])
@@ -92,7 +102,9 @@ def recommend(uid):
     Full Recommendation Pipeline: Recall -> Rank
     """
     # 1. Parse Args
-    top_k = int(request.args.get("top_k", "10"))
+    top_k = int(request.args.get("top_k", "30"))
+    if top_k <= 0 or top_k > 50:
+        top_k = 30
     
     # 2. Recall Phase
     # Fetch more candidates for ranking (e.g., 100)
@@ -119,15 +131,25 @@ def recommend(uid):
     if rank_service:
         ranked_results = rank_service.predict(uid, candidate_items, top_k=top_k)
     else:
-        # Fallback if ranker is down: just return recall items
         ranked_results = [{"id": iid, "score": 0.0} for iid in candidate_items[:top_k]]
+    
+    try:
+        hot_ids = redis_client.get_recall_results(user_id="global_hot", prefix="", top_k=1000)
+        hot_set = set(hot_ids)
+    except Exception:
+        hot_set = set()
+    
+    for item in ranked_results:
+        item["is_hot"] = item["id"] in hot_set
         
-    return jsonify({
+    resp = jsonify({
         "uid": uid,
         "stage": "rank",
         "is_cold_start": is_cold_start,
         "items": ranked_results
     })
+    resp.headers["Access-Control-Allow-Origin"] = "*"
+    return resp
 
 
 if __name__ == "__main__":

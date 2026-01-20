@@ -3,7 +3,7 @@ import json
 import numpy as np
 
 class RedisStorage:
-    def __init__(self, host='localhost', port=6379, db=0, password=None):
+    def __init__(self, host='localhost', port=6379, db=3, password=None):
         self.client = redis.Redis(host=host, port=port, db=db, password=password, decode_responses=True)
         
     def save_recall_results(self, user_id, item_ids, scores=None, prefix='recall:'):
