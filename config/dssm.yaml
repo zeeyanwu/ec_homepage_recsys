@@ -1,0 +1,19 @@
+# Configuration for the DSSM Recall Model
+
+model_name: "dssm"
+
+# --- Data Paths ---
+data_config: "config/data.yaml"
+
+# --- Model Architecture ---
+embedding_dim: 64
+hidden_dims: [256, 128]
+
+# --- Training Hyperparameters ---
+learning_rate: 0.001
+batch_size: 1024
+epochs: 10
+neg_ratio: 4  # Negative sampling ratio
+
+# --- MLflow Tracking ---
+experiment_name: "recall_dssm_pointwise"

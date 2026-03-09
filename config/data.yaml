@@ -1,0 +1,17 @@
+# Path configurations for the data pipeline
+# All paths are relative to the project root
+
+raw_data_dir: 'data/raw_data'
+processed_data_dir: 'data/processed'
+
+# Input files
+shop_log_file: 'shop.dat'
+user_feature_file: 'user_feature.dat'
+item_feature_file: 'item_feature.dat'
+
+# Output files from ETL
+train_file: 'train.csv'
+test_file: 'test.csv'
+meta_file: 'meta_data.pkl'
+feature_map_file: 'feature_map.pkl'
+global_score_file: 'item_global_score.csv'

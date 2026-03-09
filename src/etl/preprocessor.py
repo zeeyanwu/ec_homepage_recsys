@@ -3,11 +3,17 @@ import numpy as np
 import os
 import pickle
 from tqdm import tqdm
-from root import get_root_dir
-os.chdir(get_root_dir())
+# Get project root directory dynamically
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 class RecSysPreprocessor:
-    def __init__(self, data_dir='data/raw_data', processed_dir='data/processed'):
+    def __init__(self, data_dir=None, processed_dir=None):
+        # Use root directory absolute path to construct other paths
+        if data_dir is None:
+            data_dir = os.path.join(PROJECT_ROOT, 'data/raw_data')
+        if processed_dir is None:
+            processed_dir = os.path.join(PROJECT_ROOT, 'data/processed')
+
         self.data_dir = data_dir
         self.processed_dir = processed_dir
         os.makedirs(processed_dir, exist_ok=True)

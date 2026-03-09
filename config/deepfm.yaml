@@ -1,0 +1,17 @@
+# Configuration for the DeepFM Ranking Model
+
+model_name: "deepfm"
+
+# --- Data Paths ---
+data_config: "config/data.yaml" # Include base data config
+
+# --- Model Architecture ---
+embedding_dim: 16
+
+# --- Training Hyperparameters ---
+learning_rate: 0.001
+batch_size: 1024
+epochs: 10
+
+# --- MLflow Tracking ---
+experiment_name: "ranking_deepfm"
