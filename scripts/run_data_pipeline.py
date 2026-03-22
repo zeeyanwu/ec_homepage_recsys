@@ -22,8 +22,12 @@ def main():
     parser = argparse.ArgumentParser(description="Run the data processing pipeline.")
     parser.add_argument('--config', type=str, required=True, help='Path to the data configuration YAML file.')
     args = parser.parse_args()
+    print(f"Running data pipeline with config: {args.config}")
 
     config = load_config(args.config)
+    # debug
+    # print(f"Loaded configuration: {config}")
+
     run_pipeline(config)
 
 if __name__ == '__main__':

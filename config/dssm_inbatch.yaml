@@ -1,0 +1,19 @@
+
+# DSSM Model Configuration (In-Batch Negative Sampling)
+
+model_name: dssm
+data_config: 'config/data.yaml'
+training_method: 'in_batch' # Can be 'pointwise' or 'in_batch'
+
+# --- Model Architecture ---
+embedding_dim: 64
+hidden_dims: [256, 128]
+
+# --- Training Hyperparameters ---
+learning_rate: 0.001
+batch_size: 512 # Smaller batch size is often used for in-batch
+epochs: 20
+# neg_ratio is not needed for in-batch training
+
+# --- MLflow Tracking ---
+experiment_name: 'dssm_recall_model'

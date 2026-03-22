@@ -1,0 +1,19 @@
+
+# DSSM Model Configuration (Pointwise Training)
+
+model_name: dssm
+data_config: 'config/data.yaml'
+training_method: 'pointwise' # Can be 'pointwise' or 'in_batch'
+
+# --- Model Architecture ---
+embedding_dim: 64
+hidden_dims: [256, 128]
+
+# --- Training Hyperparameters ---
+learning_rate: 0.001
+batch_size: 1024
+epochs: 20
+neg_ratio: 5  # Negative sampling ratio (only for pointwise)
+
+# --- MLflow Tracking ---
+experiment_name: 'dssm_recall_model'

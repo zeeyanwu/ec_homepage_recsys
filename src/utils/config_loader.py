@@ -10,6 +10,7 @@ def load_config(config_path):
     
     with open(config_path, 'r') as f:
         config = yaml.safe_load(f)
+    print(f"Loaded configuration: {config}")
     return config
 
 def get_project_root():

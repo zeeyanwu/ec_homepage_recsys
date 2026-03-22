@@ -12,6 +12,7 @@ def run_pipeline(config):
     """
     print("=== ETL Pipeline Started ===")
     root_dir = get_project_root()
+
     processed_dir = os.path.join(root_dir, config['processed_data_dir'])
     os.makedirs(processed_dir, exist_ok=True)
 

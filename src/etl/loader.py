@@ -24,6 +24,7 @@ def load_and_merge_data(config, root_dir):
     # Merge dataframes
     df = pd.merge(df_shop, df_user, on='uid', how='left')
     df = pd.merge(df, df_item, on='iid', how='left')
+    print(df.info())
 
     # Fill missing feature values
     for col in df.columns:
