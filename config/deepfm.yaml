@@ -12,6 +12,7 @@ embedding_dim: 16
 learning_rate: 0.001
 batch_size: 512
 epochs: 15
+early_stopping_patience: 5
 
 # --- MLflow Tracking ---
 experiment_name: "ranking_deepfm"

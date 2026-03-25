@@ -15,7 +15,7 @@ logger = logging.getLogger(__name__)
 
 REDIS_HOST = os.getenv("RECSYS_REDIS_HOST", "localhost")
 REDIS_PORT = int(os.getenv("RECSYS_REDIS_PORT", "6379"))
-REDIS_DB = int(os.getenv("RECSYS_REDIS_DB", "3"))
+REDIS_DB = int(os.getenv("RECSYS_REDIS_DB", "5"))
 
 API_HOST = os.getenv("RECSYS_API_HOST", "0.0.0.0")
 API_PORT = int(os.getenv("RECSYS_API_PORT", "8000"))
@@ -56,92 +56,73 @@ def health():
     return resp, 200 if status["redis"] == "ok" else 500
 
 
-@app.route("/recall/<uid>", methods=["GET"])
-def get_recall(uid):
-    """
-    Pure Recall Interface (Candidates only, no ranking)
-    """
-    top_k_param = request.args.get("top_k", "50")
-    try:
-        top_k = int(top_k_param)
-    except ValueError:
-        top_k = 50
-    if top_k <= 0 or top_k > 500:
-        top_k = 50
-        
-    # Convert Raw UID to Slot ID if possible
-    query_uid = uid
-    if rank_service:
-        # feature_map keys are like "uid=123"
-        slot_id = rank_service.feature_map.get(f"uid={uid}")
-        if slot_id:
-            query_uid = str(slot_id)
-            
-    items = redis_client.get_recall_results(user_id=query_uid, prefix="recall:", top_k=top_k)
-    
-    # Cold start fallback
-    is_cold_start = False
-    if not items:
-        items = redis_client.get_recall_results(user_id="global_hot", prefix="", top_k=top_k)
-        is_cold_start = True
-        
-    resp = jsonify({
-        "uid": uid, 
-        "stage": "recall",
-        "count": len(items),
-        "is_cold_start": is_cold_start,
-        "items": items
-    })
-    resp.headers["Access-Control-Allow-Origin"] = "*"
-    return resp
-
-
 @app.route("/recommend/<uid>", methods=["GET"])
 def recommend(uid):
     """
-    Full Recommendation Pipeline: Recall -> Rank
+    Full Recommendation Pipeline: Multi-source Recall -> Rank
+    Implements the "Unified Block, Smart Fallback, Label-assisted" architecture.
     """
     # 1. Parse Args
-    top_k = int(request.args.get("top_k", "30"))
-    if top_k <= 0 or top_k > 50:
-        top_k = 30
+    top_k_display = int(request.args.get("top_k", "30"))
+    if top_k_display <= 0 or top_k_display > 50:
+        top_k_display = 30
     
-    # 2. Recall Phase
-    # Fetch more candidates for ranking (e.g., 100)
-    recall_k = 100 
-    
-    # Convert Raw UID to Slot ID for Redis Lookup
+    # Define recall sources for personalized recommendations
+    personal_recall_sources = ["dssm_pointwise", "dssm_inbatch"]
+    recall_k_per_source = 100 # Retrieve 100 candidates from each source
+
+    # 2. Recall Phase - Implements Smart Fallback
+    candidate_items_with_source = {} # Use dict to store {item_id: source}
+    is_cold_start = False
+
+    # -- Step 2.1: Try personalized recall first
+    # Convert Raw UID to Slot ID for Redis Lookup if necessary
     query_uid = uid
-    if rank_service:
+    if rank_service and rank_service.feature_map:
         slot_id = rank_service.feature_map.get(f"uid={uid}")
         if slot_id:
             query_uid = str(slot_id)
             
-    candidate_items = redis_client.get_recall_results(user_id=query_uid, prefix="recall:", top_k=recall_k)
-    
-    is_cold_start = False
-    if not candidate_items:
-        candidate_items = redis_client.get_recall_results(user_id="global_hot", prefix="", top_k=recall_k)
+    personal_items = redis_client.get_user_recall_results(
+        user_id=query_uid,
+        recall_sources=personal_recall_sources,
+        top_k=recall_k_per_source
+    )
+
+    if personal_items:
+        logger.info(f"Personalized recall for user {uid} found {len(personal_items)} items.")
+        for item in personal_items:
+            candidate_items_with_source[item] = "personal"
+    else:
+        # -- Step 2.2: Fallback to hot list for cold start users
+        logger.info(f"Cold start for user {uid}. Falling back to global hot list.")
         is_cold_start = True
-    
-    if not candidate_items:
+        hot_items = redis_client.get_global_hot_list(top_k=recall_k_per_source * 2) # Fetch more for fallback
+        for item in hot_items:
+            candidate_items_with_source[item] = "hot"
+
+    if not candidate_items_with_source:
+        logger.warning(f"No candidates found for user {uid} from any source.")
         return jsonify({"uid": uid, "items": []})
+
+    candidate_items = list(candidate_items_with_source.keys())
+    logger.info(f"Total unique candidates for ranking: {len(candidate_items)}")
 
     # 3. Rank Phase
     if rank_service:
-        ranked_results = rank_service.predict(uid, candidate_items, top_k=top_k)
+        # Pass source information to ranker if it can use it as a feature
+        ranked_results = rank_service.predict(uid, candidate_items, top_k=top_k_display)
     else:
-        ranked_results = [{"id": iid, "score": 0.0} for iid in candidate_items[:top_k]]
-    
-    try:
-        hot_ids = redis_client.get_recall_results(user_id="global_hot", prefix="", top_k=1000)
-        hot_set = set(hot_ids)
-    except Exception:
-        hot_set = set()
-    
+        # Fallback ranking if RankService is unavailable
+        logger.warning("RankService not available. Returning unranked candidates.")
+        ranked_results = [{"id": iid, "score": 0.0} for iid in candidate_items[:top_k_display]]
+
+    # 4. Add Labels
+    # The `is_hot` label can be derived from the recall source
     for item in ranked_results:
-        item["is_hot"] = item["id"] in hot_set
-        
+        item_id_str = str(item["id"])
+        item["is_hot"] = candidate_items_with_source.get(item_id_str) == "hot"
+
     resp = jsonify({
         "uid": uid,
         "stage": "rank",

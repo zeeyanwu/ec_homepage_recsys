@@ -1,25 +1,34 @@
-# Python
+
+# General
 __pycache__/
-*.py[cod]
-*$py.class
-
-# Jupyter Notebook
-.ipynb_checkpoints
-
-# Data
-data/
-*.csv
-*.parquet
-*.pkl
-
-# IDE
-.vscode/
-.idea/
+*.pyc
+*.pyo
+*.pyd
+.DS_Store
 
 # Environment
 .env
+.venv
+virtualenv/
 venv/
+ENV/
 env/
 
+# Docker
+.dockerignore
+docker-compose.override.yml
+
 # MLflow
-mlruns/
+/mlruns/
+
+# Data - Assuming you don't want to commit large data files
+/data/downloaded/
+/data/processed/
+/data/processed_new/
+
+# Models
+/models/saved/
+
+# IDE
+.idea/
+.vscode/

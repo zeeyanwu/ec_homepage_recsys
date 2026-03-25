@@ -1,0 +1,76 @@
+
+# Docker Compose file
+
+# Define all the services that make up our application
+services:
+
+  # The Redis service for data storage
+  redis:
+    # Use the official Redis image from Docker Hub, alpine version is lightweight
+    image: "redis:6.2-alpine"
+    container_name: recsys-redis
+    # Expose the Redis port to the host machine, so we can connect with a GUI if needed
+    ports:
+      - "6379:6379"
+    # A named volume to persist Redis data even if the container is removed
+    volumes:
+      - redis-data:/data
+    # Healthcheck to ensure Redis is ready before other services start
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # The main application service (our Python code)
+  app:
+    container_name: recsys-app
+    # Build the Docker image from the Dockerfile in the current directory
+    build: .
+    # Mount the current directory into the container at /app
+    # This allows for live code reloading without rebuilding the image
+    volumes:
+      - .:/app
+      # Mount the local mlruns directory into the container for MLflow to use
+      - ./mlruns:/app/mlruns
+    # Expose the Flask API port
+    ports:
+      - "8000:5000"
+    # Set environment variables for the application
+    # This is how we tell our Python code how to connect to Redis and MLflow
+    environment:
+      - PYTHONPATH=/app
+      - RECSYS_REDIS_HOST=redis  # Use the service name 'redis' as the hostname
+      - RECSYS_REDIS_DB=5
+      - MLFLOW_TRACKING_URI=http://mlflow:5001 # Use the service name 'mlflow'
+    # This service depends on redis and mlflow being healthy first
+    depends_on:
+      redis:
+        condition: service_healthy
+      mlflow:
+        condition: service_started # MLflow image doesn't have a healthcheck, so we wait for it to start
+
+  # The MLflow service for experiment tracking
+  mlflow:
+    container_name: recsys-mlflow
+    # We use a pre-built MLflow image for convenience
+    image: "ghcr.io/mlflow/mlflow:v2.13.0"
+    # Expose the MLflow UI port to the host
+    ports:
+      - "5001:5001"
+    # Command to start the MLflow server
+    # It will store artifacts in /mlruns/artifacts and tracking data in /mlruns/mlflow.db inside the container
+    command: >
+      mlflow server 
+      --host 0.0.0.0 
+      --port 5001 
+      --backend-store-uri file:///mlruns/mlflow.db 
+      --default-artifact-root file:///mlruns/artifacts
+    # Mount the local mlruns directory to persist MLflow data
+    volumes:
+      - ./mlruns:/mlruns
+
+# Define the named volumes used by the services
+volumes:
+  redis-data:
+  mlruns:

@@ -1,0 +1,30 @@
+# DSSM Model Configuration (In-Batch with Random Negatives ONLY)
+# This version is a high-performance, high-efficiency setup.
+# It disables the known-positive masking for speed, relying only on
+# in-batch negatives and a pool of random negatives.
+
+model_name: dssm
+data_config: 'config/data.yaml'
+training_method: 'in_batch'
+
+# --- Model Architecture ---
+embedding_dim: 64
+hidden_dims: [256, 128]
+
+# --- Training Hyperparameters ---
+learning_rate: 0.001
+batch_size: 512
+epochs: 20
+early_stopping_patience: 5
+
+# --- In-batch Experiments ---
+temperature: 1.0
+use_multi_positive_loss: false
+mask_known_positives: false # <<< DISABLED FOR THIS VERSION
+random_negative_count: 128 # The key feature of this version
+
+# --- Reproducibility ---
+random_seed: 42
+
+# --- MLflow Tracking ---
+experiment_name: 'dssm_recall_model'

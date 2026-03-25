@@ -13,7 +13,17 @@ hidden_dims: [256, 128]
 learning_rate: 0.001
 batch_size: 512 # Smaller batch size is often used for in-batch
 epochs: 20
+early_stopping_patience: 5
 # neg_ratio is not needed for in-batch training
+
+# --- In-batch Experiments ---
+temperature: 1.0 # Default temperature, no effect on softmax for this experiment.
+use_multi_positive_loss: false # Disabled for this experiment.
+mask_known_positives: true # Whether to mask known positives in loss calculation
+random_negative_count: 128 # Number of random negatives to add to each batch.
+
+# --- Reproducibility ---
+random_seed: 42
 
 # --- MLflow Tracking ---
 experiment_name: 'dssm_recall_model'

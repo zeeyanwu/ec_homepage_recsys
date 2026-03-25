@@ -41,10 +41,18 @@ class RankDataset(Dataset):
 
 
 class RecallDataset(Dataset):
-    def __init__(self, data_path, user_cols, item_cols, training_method='pointwise', neg_ratio=5, is_train=True):
-        self.data = pd.read_csv(data_path)
+    def __init__(self, data, user_cols, item_cols, training_method='pointwise', neg_ratio=5, is_train=False):
+        if isinstance(data, str):
+            print(f"Loading recall data from {data}...")
+            self.data = pd.read_csv(data)
+        else:
+            self.data = data
+        
         self.user_cols = user_cols
         self.item_cols = item_cols
+        self.training_method = training_method
+        self.neg_ratio = neg_ratio
+        self.is_train = is_train
         
         if is_train:
             # For training, we need to handle negative sampling based on the method
@@ -84,4 +92,15 @@ class RecallDataset(Dataset):
         return len(self.data)
     
     def __getitem__(self, idx):
-        return self.user_data[idx], self.item_data[idx], self.labels[idx]
+        user_features = self.user_data[idx]
+        item_features = self.item_data[idx]
+        label = self.labels[idx]
+
+        # For in-batch training, we need the original IDs for masking known positives
+        # This should only happen during training.
+        if self.is_train and self.training_method == 'in_batch':
+            uid = self.data.iloc[idx]['uid']
+            iid = self.data.iloc[idx]['iid']
+            return user_features, item_features, label, uid, iid
+        
+        return user_features, item_features, label

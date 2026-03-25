@@ -72,7 +72,7 @@ def compute_and_save_global_score(original_df, train_indices, config, root_dir, 
     # Map the last interaction time for each item to the score dataframe
     last_ts_map = train_df.groupby('iid')['ts'].max()
     df_score['last_interaction_time'] = df_score['iid'].map(last_ts_map)
-    df_score['last_interaction_time'].fillna(0, inplace=True) # Items not in train_df get 0
+    df_score['last_interaction_time'] = df_score['last_interaction_time'].fillna(0) # Items not in train_df get 0
 
     reference_time = df_score['last_interaction_time'].max() # The latest interaction time is our "now"
     
@@ -93,7 +93,7 @@ def compute_and_save_global_score(original_df, train_indices, config, root_dir, 
     # Ensure items that never appeared (last_interaction_time was 0) get a freshness_score of 0
     df_score.loc[df_score['last_interaction_time'] == 0, 'freshness_score'] = 0
     # Fill any remaining NaNs from items not in training data with 0 decay
-    df_score['freshness_score'].fillna(0, inplace=True)
+    df_score['freshness_score'] = df_score['freshness_score'].fillna(0)
 
     # Final global_score: A robust combination of quality (ctr_mean) and freshness (freshness_score)
     # The additive model is more robust than a multiplicative one, as it prevents a single low score

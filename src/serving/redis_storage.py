@@ -3,44 +3,70 @@ import json
 import numpy as np
 
 class RedisStorage:
-    def __init__(self, host='localhost', port=6379, db=3, password=None):
+    def __init__(self, host='localhost', port=6379, db=5, password=None):
         self.client = redis.Redis(host=host, port=port, db=db, password=password, decode_responses=True)
-        
-    def save_recall_results(self, user_id, item_ids, scores=None, prefix='recall:'):
+
+    def save_user_recall_results(self, user_id, item_ids, recall_source):
         """
-        保存召回结果到 Redis
-        Key: recall:{user_id}
-        Value: List of item_ids (or json string)
+        保存指定来源的【个性化】召回结果到 Redis List.
+        Key: recall:{recall_source}:{user_id}
+        e.g., recall:dssm_pointwise:123
         """
-        key = f"{prefix}{user_id}"
-        # 简单存储为 JSON 字符串，或者使用 Redis List / Sorted Set
-        # 这里使用 List
-        self.client.delete(key)
-        if scores:
-            # 使用 Sorted Set (ZSET) 存储 (item_id, score)
-            data = {item: float(score) for item, score in zip(item_ids, scores)}
-            self.client.zadd(key, data)
-        else:
-            self.client.rpush(key, *item_ids)
-            
-    def get_recall_results(self, user_id, prefix='recall:', top_k=50):
-        key = f"{prefix}{user_id}"
-        type_ = self.client.type(key)
+        key = f"recall:{recall_source}:{user_id}"
+        # 使用 pipeline 提高效率
+        pipe = self.client.pipeline()
+        pipe.delete(key)
+        if item_ids:
+            pipe.rpush(key, *item_ids)
+        pipe.execute()
+
+    def get_user_recall_results(self, user_id, recall_sources, top_k):
+        """
+        从多个来源获取【个性化】召回结果，并在线融合.
+        """
+        all_items = set()
         
-        if type_ == 'zset':
-            items = self.client.zrevrange(key, 0, top_k - 1)
-        elif type_ == 'list':
-            items = self.client.lrange(key, 0, top_k - 1)
-        else:
-            items = []
-        return items
+        # 使用 pipeline 并行获取多路召回结果
+        pipe = self.client.pipeline()
+        for source in recall_sources:
+            key = f"recall:{source}:{user_id}"
+            pipe.lrange(key, 0, top_k - 1)
         
+        results = pipe.execute()
+        
+        for items in results:
+            if items:
+                all_items.update(items)
+                
+        return list(all_items)
+
+    def save_global_hot_list(self, item_scores: dict, list_name='global_hot'):
+        """
+        保存全局热榜到 Redis Sorted Set.
+        Key: recall:hot_list:{list_name}
+        """
+        key = f"recall:hot_list:{list_name}"
+        pipe = self.client.pipeline()
+        pipe.delete(key)
+        if item_scores:
+            pipe.zadd(key, item_scores)
+        pipe.execute()
+
+    def get_global_hot_list(self, list_name='global_hot', top_k=200):
+        """
+        从 Redis Sorted Set 获取全局热榜.
+        """
+        key = f"recall:hot_list:{list_name}"
+        # ZREVRANGE to get items with highest scores
+        items_with_scores = self.client.zrevrange(key, 0, top_k - 1, withscores=True)
+        # 只返回 item_id
+        return [item for item, score in items_with_scores]
+
     def save_item_embedding(self, item_id, vector, prefix='item_emb:'):
         """
         保存 Item Embedding 用于向量检索 (FAISS or RedisSearch)
         """
         key = f"{prefix}{item_id}"
-        # Store as bytes or json list
         self.client.set(key, json.dumps(vector.tolist()))
 
     def get_item_embedding(self, item_id, prefix='item_emb:'):
