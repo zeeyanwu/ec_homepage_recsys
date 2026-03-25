@@ -63,20 +63,38 @@ def run_train_pipeline(config_path: str, run_name: str):
             raise ValueError(f"Unknown model name: {config['model_name']}")
 
         # --- Train Model ---
-        # The train_model function from the user-restored trainer.py handles the full loop
+        # The train_model function returns the best metric and the local path to the best model.
         best_metric, model_path = train_model(model, config, data_config, meta_data)
 
-        # --- Log Results to MLflow ---
-        print("\n=== Logging to MLflow ===")
-        # The metric name (e.g., test_auc) is defined inside trainer.py logic
-        mlflow.log_metric(f"best_test_metric", best_metric)
-        print(f"Logged best metric: {best_metric:.4f}")
+        # --- Log Final Results and Artifacts to MLflow ---
+        print("\n=== Logging Final Results to MLflow ===")
+        
+        # Log the primary metric that determined the best model
+        # The metric name (e.g., 'recall_at_50') is determined inside trainer.py
+        mlflow.log_metric("best_eval_metric", best_metric)
+        print(f"Logged best evaluation metric: {best_metric:.4f}")
 
-        if model_path and os.path.exists(model_path):
-            mlflow.log_artifact(model_path, artifact_path="model")
-            print(f"Logged model artifact from: {model_path}")
+        # --- Artifact Logging ---
+        # The `model_path` is constructed inside trainer.py and is relative to the project root
+        # within the container. We need to ensure it's a valid path.
+        if model_path:
+            # Check if the path is absolute. If not, construct it from the project root.
+            # This makes the logic robust regardless of where the script is run from.
+            if not os.path.isabs(model_path):
+                absolute_model_path = os.path.join(get_project_root(), model_path)
+            else:
+                absolute_model_path = model_path
+            
+            print(f"Attempting to log artifact from: {absolute_model_path}")
+            if os.path.exists(absolute_model_path):
+                # We specify `artifact_path` to organize artifacts within the MLflow run folder.
+                # For example, saving to "model" will place it at: `.../artifacts/model/model.pth`
+                mlflow.log_artifact(absolute_model_path, artifact_path="model")
+                print(f"Successfully logged model artifact.")
+            else:
+                print(f"Error: Model artifact not found at path: {absolute_model_path}. Skipping artifact logging.")
         else:
-            print(f"Model artifact not found or not saved. Skipping artifact logging.")
+            print("Warning: `train_model` did not return a model path. Skipping artifact logging.")
 
     print("\nTraining pipeline finished successfully.")
 

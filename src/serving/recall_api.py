@@ -29,7 +29,7 @@ def index():
     return send_from_directory(PROJECT_ROOT, "frontend_demo.html")
 
 # Initialize Services
-redis_client = RedisStorage(host=REDIS_HOST, port=REDIS_PORT, db=REDIS_DB)
+redis_client = RedisStorage(db=REDIS_DB)
 try:
     rank_service = RankService()
     logger.info("RankService initialized.")

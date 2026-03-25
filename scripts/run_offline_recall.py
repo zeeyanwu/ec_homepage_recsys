@@ -6,6 +6,7 @@ import pickle
 import torch
 import mlflow
 import pandas as pd
+import numpy as np
 from tqdm import tqdm
 
 # Add project root to sys.path to allow absolute imports
@@ -72,9 +73,9 @@ def generate_full_recall_for_model(model_name: str, run_id: str):
     item_feature_file = os.path.join(raw_data_dir, data_config['item_feature_file'])
 
     print(f"Loading user features from: {user_feature_file}")
-    user_features_df = pd.read_csv(user_feature_file, sep='::', header=None, names=meta_data['user_feature_cols'], engine='python')
+    user_features_df = pd.read_csv(user_feature_file, sep=',', header=None, names=meta_data['user_feature_cols'], engine='python')
     print(f"Loading item features from: {item_feature_file}")
-    item_features_df = pd.read_csv(item_feature_file, sep='::', header=None, names=meta_data['item_feature_cols'], engine='python')
+    item_features_df = pd.read_csv(item_feature_file, sep=',', header=None, names=meta_data['item_feature_cols'], engine='python')
     train_file_path = os.path.join(processed_dir, data_config['train_file'])
     print(f"Loading training history from: {train_file_path}")
     train_df = pd.read_csv(train_file_path, header=None, names=['user_id', 'item_id', 'rating', 'timestamp'])
@@ -84,7 +85,12 @@ def generate_full_recall_for_model(model_name: str, run_id: str):
 
     # --- 4. Generate All Item Embeddings ---
     print("Generating all item embeddings...")
-    item_tensors = torch.LongTensor(item_features_df[meta_data['item_feature_cols']].values).to(device)
+    # Clip IDs to be within the range of the embedding matrix
+    feature_cols = meta_data['item_feature_cols']
+    max_id = meta_data['feature_dims'] - 1
+    item_features_df[feature_cols] = item_features_df[feature_cols].clip(upper=max_id)
+
+    item_tensors = torch.LongTensor(item_features_df[meta_data['item_feature_cols']].values.astype(np.int64)).to(device)
     all_item_vectors = model.get_item_vector(item_tensors)
 
     # --- 5. Generate Recall for Each User and Store in Redis ---
@@ -100,7 +106,12 @@ def generate_full_recall_for_model(model_name: str, run_id: str):
     with torch.no_grad():
         for _, user_row in tqdm(user_features_df.iterrows(), total=len(user_features_df)):
             user_id = user_row['user_id']
-            user_tensor = torch.LongTensor(user_row[meta_data['user_feature_cols']].values).unsqueeze(0).to(device)
+
+            # Clip user feature IDs
+            user_feature_cols = meta_data['user_feature_cols']
+            user_row[user_feature_cols] = user_row[user_feature_cols].clip(upper=max_id)
+
+            user_tensor = torch.LongTensor(user_row[meta_data['user_feature_cols']].values.astype(np.int64)).unsqueeze(0).to(device)
 
             # Generate user vector
             user_vector = model.get_user_vector(user_tensor)

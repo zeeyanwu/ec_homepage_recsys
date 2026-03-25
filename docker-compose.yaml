@@ -31,8 +31,8 @@ services:
     # This allows for live code reloading without rebuilding the image
     volumes:
       - .:/app
-      # Mount the local mlruns directory into the container for MLflow to use
-      - ./mlruns:/app/mlruns
+      - ./mlruns:/mlruns
+
     # Expose the Flask API port
     ports:
       - "8000:5000"
@@ -43,7 +43,9 @@ services:
       - RECSYS_REDIS_HOST=redis  # Use the service name 'redis' as the hostname
       - RECSYS_REDIS_DB=5
       - MLFLOW_TRACKING_URI=http://mlflow:5001 # Use the service name 'mlflow'
+      - REDIS_HOST=redis
     # This service depends on redis and mlflow being healthy first
+    user: '${UID}:${GID}'
     depends_on:
       redis:
         condition: service_healthy
@@ -64,13 +66,14 @@ services:
       mlflow server 
       --host 0.0.0.0 
       --port 5001 
-      --backend-store-uri file:///mlruns/mlflow.db 
-      --default-artifact-root file:///mlruns/artifacts
+      --backend-store-uri /mlruns/mlflow.db
+      --default-artifact-root /mlruns
     # Mount the local mlruns directory to persist MLflow data
+    user: '${UID}:${GID}'
     volumes:
       - ./mlruns:/mlruns
 
 # Define the named volumes used by the services
 volumes:
   redis-data:
-  mlruns:
+

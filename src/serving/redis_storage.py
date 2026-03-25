@@ -1,9 +1,13 @@
 import redis
 import json
 import numpy as np
+import os
 
 class RedisStorage:
-    def __init__(self, host='localhost', port=6379, db=5, password=None):
+    def __init__(self, db=5, password=None):
+        host = os.environ.get("REDIS_HOST", "localhost")
+        port = int(os.environ.get("REDIS_PORT", 6379))
+        password = os.environ.get("REDIS_PASSWORD", password)
         self.client = redis.Redis(host=host, port=port, db=db, password=password, decode_responses=True)
 
     def save_user_recall_results(self, user_id, item_ids, recall_source):
