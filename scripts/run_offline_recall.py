@@ -67,30 +67,45 @@ def generate_full_recall_for_model(model_name: str, run_id: str):
 
     # --- 3. Load All User/Item Features and Interaction History ---
     print("Loading all user/item data for inference...")
-    # Construct the correct paths to the .dat files
     raw_data_dir = os.path.join(root_dir, data_config['raw_data_dir'])
     user_feature_file = os.path.join(raw_data_dir, data_config['user_feature_file'])
     item_feature_file = os.path.join(raw_data_dir, data_config['item_feature_file'])
 
+    # The user/item feature files contain all users/items for full recall generation.
+    # The column names are based on the raw data files.
     print(f"Loading user features from: {user_feature_file}")
-    user_features_df = pd.read_csv(user_feature_file, sep=',', header=None, names=meta_data['user_feature_cols'], engine='python')
+    user_features_df = pd.read_csv(user_feature_file, sep=',', header=None, names=['uid', 'utag1', 'utag2'], engine='python')
     print(f"Loading item features from: {item_feature_file}")
-    item_features_df = pd.read_csv(item_feature_file, sep=',', header=None, names=meta_data['item_feature_cols'], engine='python')
+    item_features_df = pd.read_csv(item_feature_file, sep=',', header=None, names=['iid', 'itag1', 'itag2', 'itag3'], engine='python')
+
+    # The training file is used to get the history of user interactions to avoid recommending seen items.
+    # It has a header and columns defined by the data pipeline.
     train_file_path = os.path.join(processed_dir, data_config['train_file'])
     print(f"Loading training history from: {train_file_path}")
-    train_df = pd.read_csv(train_file_path, header=None, names=['user_id', 'item_id', 'rating', 'timestamp'])
+    # The train.csv created by the pipeline should have headers, but to be robust,
+    # we specify them explicitly.
+    train_df = pd.read_csv(train_file_path, header=0, names=['uid', 'iid', 'label', 'ts'])
 
-    # Create a map of user_id -> seen item_ids
-    user_history = train_df.groupby('user_id')['item_id'].apply(set).to_dict()
+    # Create a map of user_id -> seen item_ids. The column names are 'uid' and 'iid'.
+    user_history = train_df.groupby('uid')['iid'].apply(set).to_dict()
 
-    # --- 4. Generate All Item Embeddings ---
+    # --- 4. Load Feature Map and Generate All Item Embeddings ---
+    print("Loading feature map...")
+    feature_map_path = os.path.join(processed_dir, data_config['feature_map_file'])
+    with open(feature_map_path, 'rb') as f:
+        feature_map = pickle.load(f)
+    
     print("Generating all item embeddings...")
-    # Clip IDs to be within the range of the embedding matrix
-    feature_cols = meta_data['item_feature_cols']
-    max_id = meta_data['feature_dims'] - 1
-    item_features_df[feature_cols] = item_features_df[feature_cols].clip(upper=max_id)
 
-    item_tensors = torch.LongTensor(item_features_df[meta_data['item_feature_cols']].values.astype(np.int64)).to(device)
+    # The feature columns from meta_data include 'iid', 'itag1', etc.
+    item_feature_cols_for_model = meta_data['item_feature_cols']
+    item_tensors_df = pd.DataFrame()
+    for col in item_feature_cols_for_model:
+        # Map each feature value to its ID using the feature_map
+        item_tensors_df[col] = item_features_df[col.replace('item_', '')].apply(lambda x: feature_map.get(f"{col}={x}"))
+    
+    item_tensors_df.fillna(0, inplace=True) # Handle features not seen in training
+    item_tensors = torch.LongTensor(item_tensors_df[item_feature_cols_for_model].values.astype(np.int64)).to(device)
     all_item_vectors = model.get_item_vector(item_tensors)
 
     # --- 5. Generate Recall for Each User and Store in Redis ---
@@ -101,17 +116,19 @@ def generate_full_recall_for_model(model_name: str, run_id: str):
 
     print(f"Generating recall and writing to Redis for {len(user_features_df)} users...")
     
-    recall_key_prefix = f"recall:{model_name}"
-    
+    user_feature_cols_for_model = meta_data['user_feature_cols']
+
     with torch.no_grad():
         for _, user_row in tqdm(user_features_df.iterrows(), total=len(user_features_df)):
-            user_id = user_row['user_id']
+            user_id = user_row['uid']
 
-            # Clip user feature IDs
-            user_feature_cols = meta_data['user_feature_cols']
-            user_row[user_feature_cols] = user_row[user_feature_cols].clip(upper=max_id)
-
-            user_tensor = torch.LongTensor(user_row[meta_data['user_feature_cols']].values.astype(np.int64)).unsqueeze(0).to(device)
+            # Map user features to integer IDs
+            user_feature_values = {}
+            for col in user_feature_cols_for_model:
+                user_feature_values[col] = feature_map.get(f"{col}={user_row[col.replace('user_', '')]}", 0)
+            
+            user_tensor_list = [user_feature_values[col] for col in user_feature_cols_for_model]
+            user_tensor = torch.LongTensor(user_tensor_list).unsqueeze(0).to(device)
 
             # Generate user vector
             user_vector = model.get_user_vector(user_tensor)
@@ -121,8 +138,7 @@ def generate_full_recall_for_model(model_name: str, run_id: str):
 
             # Exclude items the user has already seen
             seen_items = user_history.get(user_id, set())
-            item_ids_series = item_features_df['item_id']
-            # Create a boolean mask for seen items
+            item_ids_series = item_features_df['iid']
             seen_mask = item_ids_series.isin(seen_items)
             scores[seen_mask.values] = -float('inf')
 
@@ -131,8 +147,7 @@ def generate_full_recall_for_model(model_name: str, run_id: str):
             top_item_ids = item_ids_series.iloc[top_indices.cpu().numpy()].tolist()
 
             # Store in Redis
-            redis_key = f"{recall_key_prefix}:{user_id}"
-            redis_storage.set_recall_list(redis_key, top_item_ids)
+            redis_storage.save_user_recall_results(user_id, top_item_ids, model_name)
 
     print(f"--- Finished Full Recall Generation for {model_name} ---")
 
