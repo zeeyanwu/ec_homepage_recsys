@@ -26,9 +26,10 @@ COPY . .
 # 6. Expose Port
 # Inform Docker that the container listens on port 5000 at runtime
 # This is the default port for our Flask API server
-EXPOSE 8000
+EXPOSE 5000
 
 # 7. Default Command
-# Use Gunicorn as the production-ready WSGI server
-# --workers 1 is crucial to avoid multiprocessing issues with libraries like torch/pandas
-CMD ["gunicorn", "--workers", "1", "--bind", "0.0.0.0:8000", "src.serving.recall_api:app"]
+# The command to run when the container starts. 
+# This will launch our recommendation API service.
+# The host '0.0.0.0' is crucial to make it accessible from outside the container.
+CMD ["python", "src/serving/recommend_api.py"]
