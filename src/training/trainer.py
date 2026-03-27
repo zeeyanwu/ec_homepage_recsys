@@ -109,7 +109,12 @@ def train_model(model, config, data_config, meta_data):
     
     model_dir = os.path.join(root_dir, 'models/saved')
     os.makedirs(model_dir, exist_ok=True)
-    model_save_path = os.path.join(model_dir, f"{config['model_name']}_{config['training_method']}_best.pth") # Add method to name
+    if config['model_name'] == 'dssm':
+        # DSSM模型的文件名包含训练方法（pointwise/inbatch）
+        model_save_path = os.path.join(model_dir, f"{config['model_name']}_{config['training_method']}_best.pth")
+    else:
+        # 其他模型（如DeepFM）则不需要
+        model_save_path = os.path.join(model_dir, f"{config['model_name']}_best.pth")
 
     for epoch in range(config['epochs']):
         model.train()
