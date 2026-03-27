@@ -35,7 +35,7 @@ services:
 
     # Expose the Flask API port
     ports:
-      - "8000:5000"
+      - "8000:8000"
     # Set environment variables for the application
     # This is how we tell our Python code how to connect to Redis and MLflow
     environment:

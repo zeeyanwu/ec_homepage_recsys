@@ -67,39 +67,42 @@ def recommend(uid):
     if top_k_display <= 0 or top_k_display > 50:
         top_k_display = 30
     
-    # Define recall sources for personalized recommendations
+    # 2. Recall Phase - Multi-source Fusion with Cold Start Logic
+    candidate_items_with_source = {}  # Use dict to store {item_id: source}
+
+    # -- Define recall sources and tunable sizes
     personal_recall_sources = ["dssm_pointwise", "dssm_inbatch"]
-    recall_k_per_source = 100 # Retrieve 100 candidates from each source
+    PERSONAL_K = 100  # K for each personal source (pointwise, in-batch)
+    HOT_K_ACTIVE_USER = 50  # K for hot list for an active user
+    HOT_K_COLD_START = 200  # K for hot list for a cold-start user
 
-    # 2. Recall Phase - Implements Smart Fallback
-    candidate_items_with_source = {} # Use dict to store {item_id: source}
-    is_cold_start = False
-
-    # -- Step 2.1: Try personalized recall first
-    # Convert Raw UID to Slot ID for Redis Lookup if necessary
+    # -- Convert Raw UID to Slot ID for Redis Lookup
     query_uid = uid
     if rank_service and rank_service.feature_map:
         slot_id = rank_service.feature_map.get(f"uid={uid}")
         if slot_id:
             query_uid = str(slot_id)
-            
+
+    # -- Step 2.1: Fetch personalized recall
     personal_items = redis_client.get_user_recall_results(
         user_id=query_uid,
         recall_sources=personal_recall_sources,
-        top_k=recall_k_per_source
+        top_k=PERSONAL_K
     )
+    for item in personal_items:
+        candidate_items_with_source.setdefault(item, "personal")
 
-    if personal_items:
-        logger.info(f"Personalized recall for user {uid} found {len(personal_items)} items.")
-        for item in personal_items:
-            candidate_items_with_source[item] = "personal"
+    # -- Step 2.2: Fetch global hot list, adjusting K based on user type (cold/active)
+    is_cold_start = not bool(personal_items)
+    if is_cold_start:
+        logger.info(f"Cold start for user {uid}. Fetching {HOT_K_COLD_START} items from global hot list.")
+        hot_items = redis_client.get_global_hot_list(top_k=HOT_K_COLD_START)
     else:
-        # -- Step 2.2: Fallback to hot list for cold start users
-        logger.info(f"Cold start for user {uid}. Falling back to global hot list.")
-        is_cold_start = True
-        hot_items = redis_client.get_global_hot_list(top_k=recall_k_per_source * 2) # Fetch more for fallback
-        for item in hot_items:
-            candidate_items_with_source[item] = "hot"
+        logger.info(f"Active user {uid}. Found {len(personal_items)} personal items. Fusing with {HOT_K_ACTIVE_USER} hot items.")
+        hot_items = redis_client.get_global_hot_list(top_k=HOT_K_ACTIVE_USER)
+    
+    for item in hot_items:
+        candidate_items_with_source.setdefault(item, "hot")
 
     if not candidate_items_with_source:
         logger.warning(f"No candidates found for user {uid} from any source.")
