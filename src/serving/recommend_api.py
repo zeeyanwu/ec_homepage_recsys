@@ -1,6 +1,8 @@
 import os
 import sys
 import logging
+import time
+import uuid
 from flask import Flask, jsonify, request, send_from_directory
 
 # Add project root to sys.path
@@ -62,6 +64,7 @@ def recommend(uid):
     Full Recommendation Pipeline: Multi-source Recall -> Rank
     Implements the "Unified Block, Smart Fallback, Label-assisted" architecture.
     """
+    request_id = str(uuid.uuid4())
     # 1. Parse Args
     top_k_display = int(request.args.get("top_k", "30"))
     if top_k_display <= 0 or top_k_display > 50:
@@ -102,15 +105,22 @@ def recommend(uid):
         return jsonify({"uid": uid, "items": []})
 
     candidate_items = list(candidate_items_with_source.keys())
-    logger.info(f"Total unique candidates for ranking: {len(candidate_items)}")
+    batch_size = len(candidate_items)
+    logger.info(f"Total unique candidates for ranking for request_id={request_id}: {batch_size}")
 
     # 3. Rank Phase
     if rank_service:
         # Pass source information to ranker if it can use it as a feature
+        start_time = time.time()
         ranked_results = rank_service.predict(uid, candidate_items, top_k=top_k_display)
+        end_time = time.time()
+        inference_time_ms = (end_time - start_time) * 1000
+        logger.info(
+            f"[PERF] request_id={request_id} batch_size={batch_size} inference_time={inference_time_ms:.2f}ms"
+        )
     else:
         # Fallback ranking if RankService is unavailable
-        logger.warning("RankService not available. Returning unranked candidates.")
+        logger.warning(f"RankService not available for request_id={request_id}. Returning unranked candidates.")
         ranked_results = [{"id": iid, "score": 0.0} for iid in candidate_items[:top_k_display]]
 
     # 4. Add Labels
@@ -121,6 +131,7 @@ def recommend(uid):
 
     resp = jsonify({
         "uid": uid,
+        "request_id": request_id,
         "stage": "rank",
         "is_cold_start": is_cold_start,
         "items": ranked_results
