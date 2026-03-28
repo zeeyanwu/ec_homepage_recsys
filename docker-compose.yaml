@@ -42,6 +42,7 @@ services:
       - RECSYS_REDIS_HOST=redis  # Use the service name 'redis' as the hostname
       - RECSYS_REDIS_DB=5
       - MLFLOW_TRACKING_URI=http://mlflow:5001 # Use the service name 'mlflow'
+
       - REDIS_HOST=redis
     # This service depends on redis and mlflow being healthy first
     user: '${UID}:${GID}'

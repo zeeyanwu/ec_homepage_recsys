@@ -76,21 +76,14 @@ def recommend(uid):
     HOT_K_ACTIVE_USER = 50  # K for hot list for an active user
     HOT_K_COLD_START = 200  # K for hot list for a cold-start user
 
-    # -- Convert Raw UID to Slot ID for Redis Lookup
-    query_uid = uid
-    if rank_service and rank_service.feature_map:
-        slot_id = rank_service.feature_map.get(f"uid={uid}")
-        if slot_id:
-            query_uid = str(slot_id)
-
-    # -- Step 2.1: Fetch personalized recall
+    # -- Step 2.1: Fetch personalized recall using raw UID
     personal_items = redis_client.get_user_recall_results(
-        user_id=query_uid,
+        user_id=uid, # Use raw UID directly
         recall_sources=personal_recall_sources,
         top_k=PERSONAL_K
     )
     for item in personal_items:
-        candidate_items_with_source.setdefault(item, "personal")
+        candidate_items_with_source[item] = "personal"
 
     # -- Step 2.2: Fetch global hot list, adjusting K based on user type (cold/active)
     is_cold_start = not bool(personal_items)
@@ -102,7 +95,7 @@ def recommend(uid):
         hot_items = redis_client.get_global_hot_list(top_k=HOT_K_ACTIVE_USER)
     
     for item in hot_items:
-        candidate_items_with_source.setdefault(item, "hot")
+        candidate_items_with_source[item] = "hot"
 
     if not candidate_items_with_source:
         logger.warning(f"No candidates found for user {uid} from any source.")

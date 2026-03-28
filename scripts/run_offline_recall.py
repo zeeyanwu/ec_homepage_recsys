@@ -8,6 +8,7 @@ import mlflow
 import pandas as pd
 import numpy as np
 from tqdm import tqdm
+import json
 
 # Add project root to sys.path to allow absolute imports
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -17,19 +18,32 @@ from src.models.recall.dssm import DSSM
 from src.serving.redis_storage import RedisStorage
 from src.utils.config_loader import load_config, get_project_root
 
-def generate_full_recall_for_model(model_name: str, run_id: str):
+def generate_full_recall_for_model(model_name: str):
     """
     Generates top-K recall results for all users using a specific trained model
     and stores them in Redis.
 
     Args:
         model_name (str): The name of the model type (e.g., 'dssm_pointwise').
-        run_id (str): The MLflow run ID from which to load the model.
+                          This name must have a corresponding entry in model_versions.json.
     """
-    print(f"--- Starting Full Recall Generation for {model_name} (Run ID: {run_id}) ---")
-
-    # --- 1. Load Configurations and Metadata ---
+    
+    # --- 1. Load Configurations, Metadata, and Model Version ---
     root_dir = get_project_root()
+    
+    # Load model run ID from the central versions file
+    versions_file_path = os.path.join(root_dir, 'model_versions.json')
+    try:
+        with open(versions_file_path, 'r') as f:
+            versions = json.load(f)
+        run_id = versions[model_name]['production']
+        if not run_id:
+            raise ValueError(f"'production' run_id for '{model_name}' is empty.")
+    except (FileNotFoundError, KeyError) as e:
+        print(f"Error: Could not retrieve production run_id for '{model_name}' from {versions_file_path}. Reason: {e}")
+        sys.exit(1)
+
+    print(f"--- Starting Full Recall Generation for {model_name} (Run ID: {run_id}) ---")
     data_config = load_config(os.path.join(root_dir, 'config/data.yaml'))
     processed_dir = os.path.join(root_dir, data_config['processed_data_dir'])
     meta_file_path = os.path.join(processed_dir, data_config['meta_file'])
@@ -157,17 +171,11 @@ def main():
         "--model-name", 
         type=str, 
         required=True, 
-        help="The name for this recall set (e.g., 'dssm_pointwise')."
-    )
-    parser.add_argument(
-        "--run-id", 
-        type=str, 
-        required=True, 
-        help="The MLflow Run ID of the trained model to use."
+        help="The name of the model to use, which must have an entry in model_versions.json (e.g., 'dssm_inbatch')."
     )
     args = parser.parse_args()
 
-    generate_full_recall_for_model(args.model_name, args.run_id)
+    generate_full_recall_for_model(args.model_name)
 
 if __name__ == "__main__":
     main()

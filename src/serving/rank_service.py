@@ -5,6 +5,8 @@ import pandas as pd
 import numpy as np
 import pickle
 import logging
+import json
+import mlflow
 
 # Add project root to sys.path
 sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
@@ -80,6 +82,9 @@ class RankService:
         self.default_item_feat = {col: '0' for col in self.item_cols if col != 'iid'}
 
     def _load_model(self):
+        """
+        Load the latest production DeepFM model from MLflow based on model_versions.json.
+        """
         self.model = DeepFM(
             total_vocab_size=self.feature_dims,
             num_sparse_features=len(self.user_cols) + len(self.item_cols),
@@ -88,17 +93,33 @@ class RankService:
             hidden_dims=[64, 32],
             dropout=0.0
         )
-        
-        model_path = os.path.join(self.model_dir, 'deepfm.pth')
-        if os.path.exists(model_path):
-            state_dict = torch.load(model_path, map_location=self.device)
-            self.model.load_state_dict(state_dict)
+
+        try:
+            # Construct path to the versions file relative to this script's location
+            current_dir = os.path.dirname(os.path.abspath(__file__))
+            versions_file_path = os.path.join(current_dir, '..', '..', 'model_versions.json')
+
+            with open(versions_file_path, 'r') as f:
+                versions = json.load(f)
+            
+            prod_run_id = versions.get("deepfm", {}).get("production")
+            if not prod_run_id:
+                raise ValueError("Production Run ID for deepfm not found in model_versions.json")
+
+            model_uri = f"runs:/{prod_run_id}/model"
+            logger.info(f"Loading DeepFM model from MLflow URI: {model_uri}")
+            
+            # mlflow.pytorch.load_model expects a model directory, not just a .pth file
+            # We assume the artifact was saved with mlflow.pytorch.log_model
+            self.model = mlflow.pytorch.load_model(model_uri, map_location=self.device)
+            
             self.model.to(self.device)
             self.model.eval()
-            logger.info(f"Loaded DeepFM model from {model_path}")
-        else:
-            logger.error(f"Model not found at {model_path}")
-            raise FileNotFoundError(f"Model not found at {model_path}")
+            logger.info(f"Loaded DeepFM model from {model_uri} successfully.")
+
+        except Exception as e:
+            logger.error(f"Failed to load model from MLflow: {e}")
+            raise
 
     def get_slot_id(self, col, val):
         key = f"{col}={val}"

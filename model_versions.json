@@ -1,0 +1,14 @@
+{
+  "deepfm": {
+    "production": "2569140734864869a5506394352daf5c",
+    "staging": ""
+  },
+  "dssm_inbatch": {
+    "production": "ea1ba8ac28354cd7b231a4fcfdefcc17",
+    "staging": ""
+  },
+  "dssm_pointwise": {
+    "production": "8f273788816f4925aa4b44d95672f6e0",
+    "staging": ""
+  }
+}
