@@ -1,322 +1,147 @@
-# Zero-query Homepage Recommendation
+# End-to-End E-commerce Recommendation System
 
-End-to-end zero-query homepage recommendation system for e-commerce, targeting CTR and CVR uplift on the home feed when users arrive **without an explicit search query**.
+This repository contains a complete, production-ready, end-to-end e-commerce recommendation system. It demonstrates a full MLOps lifecycle, from data processing and model training to containerized deployment, model versioning, and performance testing.
 
-The system implements a full offline–online pipeline:
+## ✨ Features
 
-- ETL & feature engineering
-- Recall (DSSM) + hot item recall
-- Ranking (DeepFM with global hotness as dense feature)
-- Online serving via Redis + Flask API
+- **Classic Recall-then-Rank Architecture**: A robust and scalable two-stage design.
+- **Multiple Recall Strategies**:
+  - Personalized Recall using **DSSM** (Deep Structured Semantic Models).
+  - Global Hot List based on item popularity.
+- **Advanced Ranking Model**: **DeepFM** for accurate Click-Through Rate (CTR) prediction.
+- **Experiment Tracking**: Fully integrated with **MLflow** for logging models, parameters, and metrics.
+- **Containerized Services**: All backend services (API, Redis, MLflow) are managed via **Docker Compose** for one-command startup and shutdown.
+- **Lightweight Model Registry**: A GitOps-style model versioning system using a simple JSON file (`model_versions.json`) for promoting models to production.
+- **Live Performance Monitoring**: The recommendation API logs inference latency, batch size, and unique request IDs for real-time observability.
+- **Integrated Performance Testing**: Includes a dedicated script for load and stress testing the live API endpoints.
 
----
+## 🏗️ Architecture Overview
 
-## 1. Project Overview
+The system follows a standard offline/online architecture, ensuring efficiency and scalability.
 
-### Core Modules
+![Project Workflow](https://storage.googleapis.com/agent-ux-share/project_workflow_diagram_cn.png)
 
-1. **ETL / Data Pipeline**
-   - Reads raw logs and features (`shop.dat`, `user_feature.dat`, `item_feature.dat`) from `data/raw_data/`
-   - Builds a **global slot-based feature map** (string key `col=value` → integer ID)
-   - Generates train/test CSVs for both recall and ranking
-   - Computes **global item hotness score** with time decay + Bayesian-smoothed CTR
+## 🛠️ Technology Stack
 
-2. **Recall Layer (DSSM)**
-   - Dual-tower semantic model (user tower + item tower)
-   - Supports **pointwise** training with negative sampling and **in-batch** negative training
-   - Offline batch scoring to generate Top-K candidates per user
+- **Backend**: Python, Flask
+- **ML/DL**: PyTorch, Scikit-learn, Pandas
+- **MLOps**: MLflow, Docker, Docker Compose
+- **Database/Cache**: Redis
+- **Serving**: Uvicorn
 
-3. **Ranking Layer (DeepFM)**
-   - DeepFM CTR model for fine-grained ranking of recall candidates
-   - Sparse features: user & item IDs and categorical tags
-   - Dense feature: global item hotness score from ETL
+## 🚀 Getting Started
 
-4. **Serving Layer**
-   - Redis stores merged recall lists and global hot items
-   - Flask app exposes HTTP APIs for:
-     - Pure recall candidates
-     - Full recommendation pipeline: Recall → Rank
+Follow these steps to set up and run the entire recommendation system on your local machine.
 
----
-
-## 2. Environment & Dependencies
-
-### Requirements
+### Prerequisites
 
 - Python 3.8+
-- PyTorch >= 2.0.0
-- Pandas, NumPy
-- Scikit-learn
-- Redis >= 4.5.0 (running locally or remotely)
+- Docker and Docker Compose
+- Git
 
-Install dependencies:
+### Quick Start
 
-```bash
-pip install -r requirements.txt
-```
+1.  **Clone the Repository**
+    ```bash
+    git clone https://github.com/zeeyanwu/ec_homepage_recsys.git
+    cd ec_homepage_recsys
+    ```
 
----
+2.  **Install Python Dependencies**
+    ```bash
+    pip install -r requirements.txt
+    ```
 
-## 3. Data Preparation
+3.  **Launch Core Infrastructure**
+    This command starts the MLflow and Redis services in the background.
+    ```bash
+    docker-compose up -d mlflow redis
+    ```
 
-Place the following raw data files under `data/raw_data/`:
+4.  **Execute the Full Workflow**
+    Follow the steps in the **Workflow** section below to process data, train models, and deploy the recommendation service.
 
-- `shop.dat`  
-  Interaction log:  
-  `ts | uid | iid | label`
-- `user_feature.dat`  
-  User features:  
-  `uid | utag1 | utag2`
-- `item_feature.dat`  
-  Item features:  
-  `iid | itag1 | itag2 | itag3`
+## ⚙️ Workflow: Step-by-Step Guide
 
-> `uid` / `iid` here are **raw IDs** from the data provider. They will be mapped into global slot IDs during ETL.
+This project is divided into 5 core stages. Execute them in order.
 
----
+### Stage 1: Data Processing & Feature Engineering
 
-## 4. Offline Pipeline: Step-by-step
+This stage prepares the raw data into datasets suitable for model training.
 
-All commands assume you are in the project root:
+- **Command**:
+  ```bash
+  docker-compose run --rm app python scripts/run_data_pipeline.py
+  ```
+- **Input**: Raw data files from `data/raw_data/`.
+- **Output**:
+  - Processed datasets (`train.csv`, `test.csv`, etc.) in `data/processed/`.
+  - A feature mapping dictionary (`feature_map.json`).
 
-```bash
-cd /path/to/ec_homepage_recsys
-```
+### Stage 2: Model Training
 
-### 4.1 ETL & Feature Engineering
+This stage trains the recall and ranking models and logs them to MLflow.
 
-Run the ETL preprocessor to:
+- **Command**:
+  ```bash
+  # Example for training the DeepFM model
+  docker-compose run --rm app python scripts/train.py --config config/deepfm.yaml
+  ```
+- **Action**: After a model trains successfully, copy the `Run ID` printed in the terminal.
+- **Manual Step**: Paste the `Run ID` into the `production` field for the corresponding model in the `model_versions.json` file. This "promotes" the model.
 
-- Merge logs and features
-- Build global feature map (slot indexing)
-- Generate `train.csv`, `test.csv`
-- Compute global item hotness scores
+### Stage 3: Offline Data Generation
 
-```bash
-python src/etl/preprocessor.py
-```
+This stage pre-computes recall and hot-list results and stores them in Redis for fast online lookups.
 
-Outputs (under `data/processed/`):
+1.  **Generate Personalized Recall Lists**:
+    ```bash
+    # Run for each trained recall model
+    docker-compose run --rm app python scripts/run_offline_recall.py --model-name dssm_inbatch
+    ```
+2.  **Generate Global Hot List**:
+    ```bash
+    docker-compose run --rm app python scripts/run_export_hot_list_to_redis.py
+    ```
 
-- `train.csv`
-- `test.csv`
-- `meta_data.pkl` (feature dimensions and column config)
-- `feature_map.pkl` (global slot mapping: `"col=value" → int`)
-- `item_global_score.csv` (includes `iid`, `slot_id`, `global_score`, `impression_count`, `ctr_mean`)
+### Stage 4: Service Deployment & Online Recommendation
 
-### 4.2 Train Recall Model (DSSM)
+This stage launches the main `app` service, which exposes the recommendation API.
 
-The project provides two training modes for DSSM:
+- **Command**:
+  ```bash
+  docker-compose up -d --force-recreate app
+  ```
+- **Verification**:
+  - The API is now live. You can view the frontend demo at `http://localhost:8000`.
+  - Check service logs for performance metrics: `docker-compose logs -f app`.
 
-1. **Pointwise training with negative sampling**  
-   Uses BCE loss with explicit positive/negative samples.
+### Stage 5: Performance Evaluation
 
-   ```bash
-   python src/training/train_recall_dssm_pointwise.py
-   ```
+This stage runs a load test from a client's perspective to measure the API's performance.
 
-   Model is saved as:
+- **Command**:
+  ```bash
+  # Example: Test with 5000 users at a concurrency of 50
+  docker-compose run --rm app python scripts/run_stress_test.py --num-users 5000 --concurrency 50
+  ```
+- **Output**: A summary report detailing throughput (req/s), latency, and success rate will be printed to the console.
 
-   - `src/models/saved/dssm_pointwise.pth`
+## 📦 Model Management
 
-2. **In-batch negative training** (optional / experimental)
+Model versions are managed via the `model_versions.json` file. This file acts as a single source of truth for which model `Run ID` is used in `production` or `staging`. To deploy a new model, simply update the `Run ID` in this file and commit the change. The services will automatically load the new model upon restart.
 
-   ```bash
-   python src/training/train_recall_dssm_inbatch.py
-   ```
+## <caption> Service Management
 
-   Model is saved as:
-
-   - `src/models/saved/dssm_inbatch.pth`
-
-The default downstream export script uses the **pointwise** model (`dssm_pointwise.pth`).
-
-### 4.3 Train Ranking Model (DeepFM)
-
-Train the DeepFM CTR ranking model using the processed data and global hotness score:
-
-```bash
-python src/training/train_rank_deepfm.py
-```
-
-This script:
-
-- Loads `train.csv` / `test.csv` and `meta_data.pkl`
-- Builds sparse inputs from user/item slot IDs
-- Builds a dense feature from `item_global_score.csv` (per-item global_score)
-- Trains DeepFM and reports AUC
-
-Model is saved as:
-
-- `src/models/saved/deepfm.pth`
-
-### 4.4 Export Recall Results & Global Hot to Redis
-
-Before running export, make sure a Redis instance is available, for example:
-
-```bash
-redis-server
-```
-
-Then run:
-
-```bash
-python src/serving/export_to_redis.py --host localhost --port 6379
-```
-
-This script will:
-
-1. Load:
-   - `meta_data.pkl`
-   - `train.csv`, `test.csv`
-   - `dssm_pointwise.pth`
-   - `item_global_score.csv`
-2. Compute user–item similarity scores using the DSSM model
-3. Merge DSSM Top-K candidates per user with global hot items using an interleaving strategy
-4. Write the following keys to Redis (DB = 1 by default):
-
-- Per-user merged recall list:
-  - Key pattern: `recall:{user_slot_id}`
-  - Value: ZSET of **raw item IDs** with descending scores encoding order
-- Global hot items:
-  - Key: `global_hot`
-  - Value: ZSET of **raw item IDs** with their `global_score`
-
-These keys will be consumed by the online serving layer.
-
----
-
-## 5. Online Serving
-
-### 5.1 Components
-
-- **Redis**: stores merged recall lists and global hot items (as above)
-- **RankService**: wraps DeepFM model and feature lookup for inference  
-  Location: `src/serving/rank_service.py`
-- **Flask API**: main HTTP entrypoint  
-  Location: `src/serving/recall_api.py`
-
-### 5.2 Environment Variables
-
-The serving app reads the following environment variables (with defaults):
-
-- `RECSYS_REDIS_HOST` (default: `localhost`)
-- `RECSYS_REDIS_PORT` (default: `6379`)
-- `RECSYS_REDIS_DB` (default: `1`)
-- `RECSYS_API_HOST` (default: `0.0.0.0`)
-- `RECSYS_API_PORT` (default: `8000`)
-
-### 5.3 Start the API Server
-
-From the project root:
-
-```bash
-python src/serving/recall_api.py
-```
-
-You should see logs similar to:
-
-- DeepFM model loaded
-- RankService initialized
-- Flask app listening on `http://0.0.0.0:8000`
-
-### 5.4 API Endpoints
-
-#### 5.4.1 Health Check
-
-```bash
-GET /health
-```
-
-Response example:
-
-```json
-{
-  "redis": "ok",
-  "rank_service": "ok"
-}
-```
-
-#### 5.4.2 Pure Recall (Candidates Only)
-
-```bash
-GET /recall/<uid>?top_k=50
-```
-
-- `uid`: **raw user ID** from the original data
-- Internally:
-  - The service converts raw `uid` → slot ID using the feature map loaded in `RankService`
-  - Uses the slot ID to look up `recall:{user_slot_id}` in Redis
-  - If no record exists, falls back to `global_hot`
-
-Response example:
-
-```json
-{
-  "uid": "5905843863414246198",
-  "stage": "recall",
-  "count": 50,
-  "is_cold_start": false,
-  "items": [
-    "2913544956788485329",
-    "18292817638588633000",
-    "... more item ids ..."
-  ]
-}
-```
-
-#### 5.4.3 Full Recommendation: Recall → Rank
-
-```bash
-GET /recommend/<uid>?top_k=10
-```
-
-- `uid`: raw user ID
-- `top_k`: number of ranked items to return (default 10)
-
-Pipeline inside the endpoint:
-
-1. Convert raw `uid` → slot ID
-2. Fetch up to 100 candidates from `recall:{user_slot_id}` (or `global_hot` for cold-start)
-3. Use `RankService` (DeepFM) to compute CTR scores for each candidate
-4. Sort by score and return the top `top_k`
-
-Response example:
-
-```json
-{
-  "uid": "5905843863414246198",
-  "stage": "rank",
-  "is_cold_start": false,
-  "items": [
-    { "id": "2913544956788485329", "score": 0.99 },
-    { "id": "18292817638588633000", "score": 0.99 },
-    { "id": "16199685692793916813", "score": 0.98 }
-  ]
-}
-```
-
----
-
-## 6. High-level Architecture Summary
-
-- **Feature Engineering**
-  - Global slot-based encoding ensures consistent IDs across recall and ranking
-  - Global hotness score combines **popularity (impressions)** and **CTR** with time decay and Bayesian smoothing
-
-- **Recall**
-  - DSSM computes dense embeddings for users and items
-  - Offline batch scoring writes Top-K raw item IDs per user into Redis (`recall:{uid_slot}`)
-  - Global hot items are exported separately for cold-start users (`global_hot`)
-
-- **Ranking**
-  - DeepFM takes:
-    - Sparse features: slot IDs for user and item
-    - Dense feature: `global_score` from ETL
-  - Outputs CTR probability used for sorting
-
-- **Serving**
-  - `/recall/<uid>`: view recall results only (debugging / analysis)
-  - `/recommend/<uid>`: full pipeline (Recall → Rank) used by the homepage feed
-
-This README reflects the current end-to-end implementation of the **zero-query homepage recommendation** system, including ETL, recall (DSSM), ranking (DeepFM), Redis export, and online serving via Flask.
+- **Start all services**:
+  ```bash
+  docker-compose up -d --force-recreate
+  ```
+- **Stop all services**:
+  ```bash
+  docker-compose down
+  ```
+
+## 📜 License
+
+This project is licensed under the MIT License.
